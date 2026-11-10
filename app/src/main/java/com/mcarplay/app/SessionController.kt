@@ -23,6 +23,7 @@ import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
+import com.mcarplay.app.carlife.CarWithSessionFlag
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeMultiTouchState
 import com.mcarplay.app.carlife.CarLifeProtocol
@@ -779,6 +780,7 @@ object SessionController {
     }
 
     private fun stopFormalCarLife() {
+        appContext?.let(CarWithSessionFlag::clear)
         carLifeOutput = null
         currentCarLifeSession?.let {
             it.stop()
@@ -789,11 +791,35 @@ object SessionController {
         }
     }
 
+    /**
+     * 上次进程异常结束（被强杀/崩溃）时，CarWith 侧还留着上一轮 CarLife 会话的密钥状态，
+     * 本次握手会在命令通道解密失败。连接线程上同步清掉再建会话。
+     *
+     * force-stop 需要 Shizuku（普通应用无权杀别的包）：拿不到权限就只记日志继续，
+     * 让用户知道这种情况下 CarWith 可能起不来，而不是静默失败。
+     */
+    private fun resetCarWithIfNeeded(context: Context) {
+        if (!pendingCarWithReset) return
+        pendingCarWithReset = false
+        appendLog("CARLIFE: 上次会话异常结束——清理 CarWith 残留会话")
+        val result = Shell.exec("am force-stop com.miui.carlink", 5_000L)
+        if (result.ok) {
+            appendLog("CARLIFE: 已清掉 CarWith 残留会话")
+        } else {
+            appendLog(
+                "CARLIFE: 清理 CarWith 失败（${result.output.take(60).ifBlank { "exit=${result.exitCode}" }}）" +
+                    "——若本次 CarWith 起不来，请手动关掉 CarWith 再连，或安装 Shizuku",
+            )
+        }
+    }
+
     /** 正式会话的 CarLife 源：输出按 [carLifeOutput] 路由，旧轮迟到回调被隔离。 */
     private fun newFormalCarLifeSession(
         context: Context,
         requestedVideoSize: Pair<Int, Int>? = null,
     ): CarLifeSession {
+        resetCarWithIfNeeded(context)
+        CarWithSessionFlag.markOpen(context)
         lateinit var session: CarLifeSession
         session =
             CarLifeSession(
@@ -891,6 +917,8 @@ object SessionController {
             return
         }
         if (!automatic) AutoConnectPrefs.clearManualStop(context)
+        // 必须在任何 retireSession 之前取：retireSession → stopFormalCarLife 会清标记。
+        pendingCarWithReset = CarWithSessionFlag.takeAbnormal(context)
         val alreadyRunning = isSessionRunning()
         val diagnosticAttempt =
             if (isSessionRunning()) {
@@ -3013,6 +3041,14 @@ object SessionController {
     /** 本次连接内「SETUP 被车机关通道后等邀请重连」已用次数（startConnection 清零）。 */
     @Volatile
     private var inviteRetryCount = 0
+
+    /**
+     * 本轮需要先清掉 CarWith 的残留会话（上一次进程没走正常收尾）。
+     * 在 [startConnection] 入口取一次即清，真正的 force-stop 在建 CarLife 会话前做——
+     * 那里已经在连接线程上，不占主线程。
+     */
+    @Volatile
+    private var pendingCarWithReset = false
 
     /**
      * 初始 SETUP 被车机立即关通道后：等车机下一次 ctrl 邀请（比当前更新的那次）再重走连接。
