@@ -360,7 +360,9 @@ class Iap2LinkEngine(
         val frame = receive.take(length)
         val payloadWithChecksum = frame.copyOfRange(HEADER_BYTES, length)
         if (payloadWithChecksum.isNotEmpty() && !checksumValid(payloadWithChecksum)) {
-            receive.discard(1)
+            // 帧已在上一步整帧 take 走，这里不能再 discard(1)：那吃的是**下一帧的首字节**，
+            // 会让紧随其后的合法帧在 FF5A 扫描里再也对不齐——一个坏帧变两个丢帧。
+            // 头部校验已通过，length 可信，帧边界明确，直接丢弃本帧即可。
             return true
         }
         val payload =

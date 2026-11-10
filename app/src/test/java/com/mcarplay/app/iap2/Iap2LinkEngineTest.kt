@@ -101,6 +101,38 @@ class Iap2LinkEngineTest {
         assertArrayEquals(accessoryToPhone, receivedAtPhone[0])
     }
 
+    /**
+     * 载荷校验失败的帧被丢弃后，紧随其后的合法帧必须还能被解析。
+     *
+     * 旧实现在 `receive.take(length)` 之后又 `discard(1)`——帧已经整帧取走了，那一个字节
+     * 吃的是**下一帧的首字节 0xFF**，此后 FF5A 扫描再也对不齐，一个坏帧变成两个丢帧。
+     * 本用例在旧代码下必然失败（合法帧收不到）。
+     */
+    @Test
+    fun corruptedPayloadDoesNotSwallowFollowingFrame() {
+        val phone = Iap2LinkEngine()
+        val accessory = Iap2LinkEngine()
+        phone.start(0)
+        accessory.start(0)
+        exchangeUntilNormal(phone, accessory)
+
+        assertTrue(accessory.sendControl(Iap2Csm.encode(0x1D00), 1))
+        val corruptFrame = accessory.takeOutput().copyOf()
+        // 只破坏帧尾的载荷校验和，头部与长度保持有效（模拟真实误码）
+        corruptFrame[corruptFrame.size - 1] =
+            (corruptFrame[corruptFrame.size - 1].toInt() xor 0xFF).toByte()
+
+        val goodPayload = Iap2Csm.encode(0x1D01)
+        assertTrue(accessory.sendControl(goodPayload, 2))
+        val goodFrame = accessory.takeOutput()
+
+        phone.feed(corruptFrame + goodFrame, 3)
+
+        val received = pollControls(phone)
+        assertEquals("坏帧之后的合法帧不能被吃掉", 1, received.size)
+        assertArrayEquals(goodPayload, received[0])
+    }
+
     @Test
     fun duplicateFrameIsReAcknowledgedNotRedelivered() {
         val phone = Iap2LinkEngine()

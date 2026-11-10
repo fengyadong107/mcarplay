@@ -182,6 +182,9 @@ class AacLcEncoder(
 
     fun start(): Boolean {
         if (started) return true
+        // configure/start 抛异常时 created 还没赋给 codec，close() 拿不到它——必须在这里释放，
+        // 否则重连反复失败会累积编码器实例（同 decodePeak() 的释放写法）。
+        var created: MediaCodec? = null
         return try {
             val format =
                 MediaFormat.createAudioFormat(MIME, sampleRate, channels).apply {
@@ -192,10 +195,11 @@ class AacLcEncoder(
                     setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
                     setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, inputFrameBytes)
                 }
-            val created = MediaCodec.createEncoderByType(MIME)
-            created.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            created.start()
-            codec = created
+            val encoder = MediaCodec.createEncoderByType(MIME)
+            created = encoder
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder.start()
+            codec = encoder
             presentationUs = 0L
             started = true
             log(
@@ -204,6 +208,8 @@ class AacLcEncoder(
             )
             true
         } catch (error: Exception) {
+            runCatching { created?.stop() }
+            runCatching { created?.release() }
             log("AUDIO: AAC-LC 编码器启动失败 - ${error.message}（本档位放弃）")
             started = false
             false

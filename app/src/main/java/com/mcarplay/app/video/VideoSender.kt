@@ -394,24 +394,37 @@ class VideoSender(
                 }
             }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        // 个别编码器不接受 level 指定（configure 抛异常=视频全灭），降级为不指定重试
+        // configure/createInputSurface/start 任一步抛异常都要把 codec 释放掉：调用方拿不到
+        // 这个实例（字段还是 null），releaseVideoResources 也救不了它。自动重连反复失败会
+        // 累积到 Failed to allocate component instance，此后视频与 AAC 都起不来。
+        // 与 startTranscoding() 的释放写法保持一致。
+        var surface: Surface? = null
         try {
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (levelRejected: Exception) {
-            log("VIDEO: 指定 level 4.0${if (baselineProfile) " / Baseline" else ""} 被编码器拒绝（${levelRejected.message}）——回退自动选择（部分车机可能黑屏）")
-            val fallback =
-                MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
-                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                    if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
-                }
-            codec.configure(fallback, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            // 个别编码器不接受 level 指定（configure 抛异常=视频全灭），降级为不指定重试
+            try {
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            } catch (levelRejected: Exception) {
+                log("VIDEO: 指定 level 4.0${if (baselineProfile) " / Baseline" else ""} 被编码器拒绝（${levelRejected.message}）——回退自动选择（部分车机可能黑屏）")
+                val fallback =
+                    MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encodeWidth, encodeHeight).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                        if (capEncoderFps) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+                    }
+                codec.configure(fallback, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            }
+            val createdSurface = codec.createInputSurface()
+            surface = createdSurface
+            codec.start()
+            return codec to createdSurface
+        } catch (error: Exception) {
+            runCatching { surface?.release() }
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            throw error
         }
-        val surface = codec.createInputSurface()
-        codec.start()
-        return codec to surface
     }
 
     fun stop() {
