@@ -103,8 +103,19 @@ class CarLifeMultiTouchTest {
                 width = 100,
                 height = 100,
             )
+        // 同帧按下也必须发两条：只有 POINTER_DOWN 会让 CarWith 登记第二根手指
         assertEquals(
-            listOf(CarLifeWireTouch(CarLifeProtocol.TOUCH_ACTION, 40, 50, act.DOWN, 60, 50)),
+            listOf(
+                CarLifeWireTouch(CarLifeProtocol.TOUCH_ACTION, 40, 50, act.DOWN, 60, 50),
+                CarLifeWireTouch(
+                    CarLifeProtocol.TOUCH_ACTION,
+                    40,
+                    50,
+                    act.withPointer(act.POINTER_DOWN, 1),
+                    60,
+                    50,
+                ),
+            ),
             down,
         )
     }

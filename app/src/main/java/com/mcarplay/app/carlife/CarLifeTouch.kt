@@ -157,19 +157,19 @@ class CarLifeMultiTouchState {
                 last0X = c0!!.x
                 last0Y = c0.y
                 if (c1Down) {
-                    // 两指同一帧按下：整笔从复合通道 ACTION_DOWN 起。
-                    multiActive = true
-                    slot1Down = true
-                    last1X = c1!!.x
-                    last1Y = c1.y
+                    // 两指同一帧按下：**两条**，先 ACTION_DOWN 再 ACTION_POINTER_DOWN。
+                    // CarWith 只在 case 5（POINTER_DOWN）里登记第二根手指（反编译
+                    // CarlifeTouchManager.onActionEvent）；只发一条带两个点的 ACTION_DOWN
+                    // 时它只认第 0 指，后续 MOVE 退化成单指拖——真机现象：地图朝左平移。
                     out += CarLifeWireTouch(
-                        CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y, act.DOWN, c1.x, c1.y,
+                        CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y, act.DOWN, c1!!.x, c1.y,
                     )
                 } else {
                     out += CarLifeWireTouch(CarLifeProtocol.TOUCH_DOWN, c0.x, c0.y)
                 }
-            } else if (c1Down && !slot1Down) {
-                // 第一指已在单点通道按住，第二指后到：切复合通道。
+            }
+            if (c1Down && !slot1Down) {
+                // 第二指按下（同帧或后到）：切复合通道并登记指针 1。
                 multiActive = true
                 slot1Down = true
                 last0X = c0!!.x
@@ -180,7 +180,7 @@ class CarLifeMultiTouchState {
                     CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y,
                     act.withPointer(act.POINTER_DOWN, 1), c1.x, c1.y,
                 )
-            } else if (c0!!.x != last0X || c0.y != last0Y) {
+            } else if (!multiActive && (c0!!.x != last0X || c0.y != last0Y)) {
                 last0X = c0.x
                 last0Y = c0.y
                 out += CarLifeWireTouch(CarLifeProtocol.TOUCH_MOVE, c0.x, c0.y)
