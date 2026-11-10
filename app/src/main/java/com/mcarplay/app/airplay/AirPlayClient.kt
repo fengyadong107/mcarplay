@@ -694,8 +694,8 @@ class AirPlayClient(
             synchronized(this) { closingConnections-- }
         }
         // 注意：controlIapTx 不在这里 shutdown——close() 会被同实例的重试路径
-        // （retryWithPairing 等）复用，杀掉执行器会废掉重连后的 MIB3 出站；
-        // 守护线程常驻的代价可忽略（每客户端实例一根）
+        // （retryWithPairing 等）复用，杀掉执行器会废掉重连后的 MIB3 出站。
+        // 它本来就是进程级共享的（见 controlIapTx），不随实例增减，不存在泄漏。
     }
 
     /**
@@ -1829,11 +1829,8 @@ class AirPlayClient(
      * 不宽容；AADisplay Frida 结论）。串行执行器：不阻塞链路节拍线程，与
      * /feedback 心跳共用 request() 的 CSeq/写锁（线程安全设计见 AirPlayClient）。
      */
-    private val controlIapTx =
-        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-            Thread(r, "mib3-iap-tx").apply { isDaemon = true }
-        }
     private var controlIapCount = 0
+
 
     /** 仅允许有序断开的 iAP 帧穿过 STOPPING，普通迟到帧仍被拒绝。 */
     private val stopIapTransmissions = ThreadLocal<MutableList<java.util.concurrent.Future<Boolean>>>()
@@ -1979,6 +1976,18 @@ class AirPlayClient(
 
         /** SETUP `macAddress` 占位（catplay 同款）；只有已登记的车机才换成真实 Wi-Fi 地址。 */
         const val PLACEHOLDER_WIFI_MAC = "aa:bb:cc:dd:ee:ff"
+
+        /**
+         * MIB3 控制通道出站用的**进程级**单线程执行器。
+         *
+         * 必须是单例：AirPlayClient 每次连接尝试都会新建实例（SessionController 的
+         * newClient()），而 close() 不能 shutdown（同实例的重试路径 retryWithPairing 还要用）。
+         * 按实例持有的话，每重连一次就多一根永不回收的守护线程，一天下来线性增长。
+         */
+        private val controlIapTx =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "mib3-iap-tx").apply { isDaemon = true }
+            }
 
         /** 有序断开各步间隔：真 iPhone 0x4E0D→屏幕流 TEARDOWN 约 130 ms、→会话 TEARDOWN 约 220 ms。 */
         const val ORDERLY_STOP_STEP_MILLIS = 150L
