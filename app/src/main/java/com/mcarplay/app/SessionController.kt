@@ -1181,6 +1181,13 @@ object SessionController {
         restorePhoneScreen(sleepIfCarSide = false)
         audioSender?.stop()
         audioSender = null
+        // 档位归因状态必须随会话清空：onEnded 里的 attributeAudioTeardown 在「用户点断开」
+        // 这条路径走不到（videoSender 已置空，3839 行的守卫直接 return），状态会留到下一轮。
+        // 下一轮若是纯视频（无音频），这些字段没人覆盖，自然结束时会拿上一轮的时间戳去
+        // 回写 AudioProfileMemory，lived<20s 还会把档位误判成不兼容。
+        activeAudioProfile = null
+        activeAudioReceiverKey = ""
+        activeAudioStartedAt = 0L
         nativeAudioBridge?.stop()
         nativeAudioBridge = null
         currentSharedSecret = null
@@ -1208,25 +1215,31 @@ object SessionController {
     }
 
     /** 会话已建立且投影就绪、但音频尚未启动时，动态补启（投影授权晚于连接的场景）。 */
-    @Synchronized
     fun maybeStartAudioNow(context: Context) {
-        val client =
-            currentClient ?: run {
-                appendLog("MODE: 已启用声音（当前无会话，下次连接时接入）")
-                return
+        // 只把状态检查放进短临界区；SETUP 最长数十秒（多档位 timeout 累加），不能占着
+        // 会话锁——disconnect 也是 @Synchronized 且在主线程调用，UI 点「断开」会跟着卡住
+        // 甚至 ANR。与 retryAudioAfterClaimReturned 同一写法。
+        val ready =
+            synchronized(this) {
+                val client =
+                    currentClient ?: run {
+                        appendLog("MODE: 已启用声音（当前无会话，下次连接时接入）")
+                        return
+                    }
+                if (client.sessionStopping) {
+                    appendLog("AUDIO: 会话正在结束——跳过动态开启声音")
+                    return
+                }
+                val secret =
+                    currentSharedSecret ?: run {
+                        appendLog("MODE: 明文会话（未配对）无共享密钥——不补启音频")
+                        return
+                    }
+                if (audioSender?.isRunning == true) return
+                Triple(client, secret, currentAudioHost)
             }
-        if (client.sessionStopping) {
-            appendLog("AUDIO: 会话正在结束——跳过动态开启声音")
-            return
-        }
-        val secret = currentSharedSecret
-        if (secret == null) {
-            appendLog("MODE: 明文会话（未配对）无共享密钥——不补启音频")
-            return
-        }
-        if (audioSender?.isRunning == true) return
         appendLog("MODE: 会话进行中，动态补启音频通道…")
-        startAudioAndRecord(context, client, secret, currentAudioHost, "AUDIO: 动态加入音频流——检查会话激活")
+        startAudioAndRecord(context, ready.first, ready.second, ready.third, "AUDIO: 动态加入音频流——检查会话激活")
     }
 
     /** 启动音频并在成功后补 RECORD；连接、动态补启和仲裁重试三条入口共用。 */
@@ -2062,12 +2075,7 @@ object SessionController {
         appContext?.let { ctx ->
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 runCatching {
-                    val cm =
-                        ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                            as android.content.ClipboardManager
-                    cm.setPrimaryClip(
-                        android.content.ClipData.newPlainText("carplay-wifi", passphrase),
-                    )
+                    com.mcarplay.app.util.copySensitiveText(ctx, "carplay-wifi", passphrase)
                     uiHintSink?.invoke(t(R.string.sc_psk_copied, passphrase.length))
                 }
             }
@@ -3985,6 +3993,12 @@ object SessionController {
                                     val videoStarted = claimed && videoSender?.start {} == true
                                     // 入网已完成，此时才拿低延迟锁（持锁会让入网所需的 Wi‑Fi 扫描失败）
                                     if (videoStarted) StreamingWifiLock.acquire(context)
+                                    // 常亮/自动暗幕由会话驱动：此前全仓只有 setSessionActive(false)，
+                                    // 没有 true，sessionActive 恒为 false → 常亮与 45s 暗幕从未生效。
+                                    if (videoStarted) {
+                                        ScreenDimmer.setSessionActive(true)
+                                        if (DisplayPrefs.screenOffOnConnect(context)) enterPhoneScreenOff()
+                                    }
                                     if (videoStarted) streamingDiagnosticAttempt = diagnosticAttempt
                                     // 锁屏/息屏/Doze 迁移写进日志与时间线（锁屏退出的定位依据，只读不改状态）
                                     if (videoStarted) {
