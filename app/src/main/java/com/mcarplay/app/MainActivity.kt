@@ -68,6 +68,7 @@ import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.ui.kit.StepperView
 import com.mcarplay.app.update.WhatsNew
 import com.mcarplay.app.util.Bg
+import com.mcarplay.app.util.copySensitiveText
 import com.mcarplay.app.util.DeviceIdentity
 import com.mcarplay.app.util.LogExporter
 
@@ -1202,8 +1203,7 @@ class MainActivity : AppCompatActivity() {
             // 自动加入不可用时的手动兜底：密码先进剪贴板，系统 WLAN 页粘贴即可
             val psk = SessionController.lastWifiPsk
             if (psk != null) {
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("carplay-wifi", psk))
+                copySensitiveText(this, "carplay-wifi", psk)
                 snack(getString(R.string.ma_psk_copied, psk.length))
                 log(
                     "WiFi: 热点密码已复制到剪贴板，选择 \"$ssid\" 粘贴密码；" +

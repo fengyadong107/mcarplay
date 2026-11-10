@@ -54,6 +54,13 @@ class SilentProjectionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 组件 exported=true（Shizuku 的 `am start` 需要），因此任何应用都能拉起它——而它会
+        // 在锁屏上点亮屏幕并弹系统投屏授权。本应用发起时一定先置了 pending（request() 第
+        // 一步），没有 pending 就是外部拉起，直接退出，不做任何界面动作。
+        if (pending.get() == null) {
+            finishSilently()
+            return
+        }
         // 手机在口袋里（锁屏 + 息屏）时，后台 Activity 不会被 resume，onActivityResult 会一直
         // 挂着；这两个标志让本页在锁屏上也能立刻走完（配合暗幕/真息屏，用户无感）。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {

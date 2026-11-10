@@ -93,6 +93,16 @@ class CarPlayService : Service() {
             }
             return START_NOT_STICKY
         }
+        // 系统按 START_STICKY 拿 null intent 重启时，上面所有 action 分支都会落空。此时
+        // 进程内的会话对象已随上次进程消失，不会再有 ACTION_AUTO_STOP 来收尾——如果照样
+        // 起前台通知 + 唤醒锁，就是「运行中」通知和 PARTIAL_WAKE_LOCK 一起常驻到用户手动
+        // 连一次再断开为止。没有会话就直接收工。
+        if (intent?.action == null && !SessionController.isSessionRunning() && !CarLifeDiagnostics.isRunning()) {
+            fileLog("SVC: 系统空启动（无会话）——直接停服务")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
         // 必须显式指定类型为 connectedDevice：
         // 2 参 startForeground 会拾取 manifest 声明的全部类型（含 mediaProjection），
         // 而 Android 14 启动 mediaProjection 类型要求 AppOps PROJECT_MEDIA（用户当次授权才有效）——
