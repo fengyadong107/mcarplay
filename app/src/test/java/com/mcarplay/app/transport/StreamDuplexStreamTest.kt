@@ -34,7 +34,20 @@ class StreamDuplexStreamTest {
                 start()
             }
 
-        Thread.sleep(200) // 确保读线程已经阻塞在 read()
+        // 不能靠 sleep 猜时序：读者还没进 read() 就写，旧的一把锁实现也能通过，回归被漏掉。
+        // 轮询线程状态，确认它真的阻塞在 read() 上再写（WAITING/TIMED_WAITING 都算，
+        // PipedInputStream 用的是 wait(1000) 定时等待）。
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (reader.state != Thread.State.WAITING &&
+            reader.state != Thread.State.TIMED_WAITING &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(5)
+        }
+        assertTrue(
+            "读线程未进入阻塞读（state=${reader.state}），本次断言无意义",
+            reader.state == Thread.State.WAITING || reader.state == Thread.State.TIMED_WAITING,
+        )
 
         val written = CountDownLatch(1)
         Thread({

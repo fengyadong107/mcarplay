@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -62,7 +63,18 @@ class InMemoryStreamPairTest {
         val pair = InMemoryStreamPair()
         val result = AtomicReference<Int>()
         val reader = Thread({ result.set(pair.sideA.read(ByteArray(8))) }, "reader").apply { start() }
-        Thread.sleep(100)
+        // 同上：等读者真的阻塞在 read() 上，而不是 sleep 一个猜测值。
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (reader.state != Thread.State.WAITING &&
+            reader.state != Thread.State.TIMED_WAITING &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(5)
+        }
+        assertTrue(
+            "读线程未进入阻塞读（state=${reader.state}）",
+            reader.state == Thread.State.WAITING || reader.state == Thread.State.TIMED_WAITING,
+        )
 
         pair.sideB.close()
         reader.join(1_000)

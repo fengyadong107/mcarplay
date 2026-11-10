@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- remoteDebug 变体叠加：只有调试包才需要的能力。此前这些写在 src/remote（flavor 级），
+     remoteRelease 同样继承，与「只放开调试包；发布包不受影响」的注释相悖。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 调试期可读系统日志（logcat），需用户 adb pm grant -->
+    <uses-permission android:name="android.permission.READ_LOGS" />
+    <!-- DUMP 同样是开发授权 -->
+    <uses-permission android:name="android.permission.DUMP" tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic">
+        <!-- usesCleartextTraffic：调试桥按部署可能是纯 HTTP（如 frp+VPS 的
+             http://IP:8787），API 28+ 默认禁明文会让 APK 下载直接失败
+             （2026-10-21 实测 Cleartext HTTP traffic not permitted）。 -->
+    </application>
+</manifest>

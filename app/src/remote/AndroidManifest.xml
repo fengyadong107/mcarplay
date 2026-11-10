@@ -6,19 +6,11 @@
     <!-- 重装闭环：PackageInstaller 发起安装（系统仍会弹确认） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- Optional development permissions: granted only by user-run ADB; no permission means no system logs. -->
-    <uses-permission android:name="android.permission.READ_LOGS" />
-    <!-- DUMP is a development permission explicitly granted by user-run adb pm grant. -->
-    <uses-permission android:name="android.permission.DUMP" tools:ignore="ProtectedPermissions" />
-
     <application
         android:name=".bridge.BridgeApp"
-        android:usesCleartextTraffic="true"
-        tools:replace="android:name,android:usesCleartextTraffic">
-        <!-- usesCleartextTraffic：调试桥按部署可能是纯 HTTP（如 frp+VPS 的
-             http://IP:8787），API 28+ 默认禁明文会让 APK 下载直接失败
-             （2026-10-21 实测 Cleartext HTTP traffic not permitted）。
-             只放开调试包；发布包不受影响。 -->
+        tools:replace="android:name">
+        <!-- 明文 HTTP / READ_LOGS / DUMP 只在 remoteDebug 叠加（见 src/remoteDebug），
+             发布包不再继承。 -->
 
         <!-- 调试版唯一桌面入口「mcarplay 远程调试」：填地址/配对码，页内有「打开主界面」。
              singleTop：安装确认/续接询问带参重入时走 onNewIntent，不叠加实例 -->

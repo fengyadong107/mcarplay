@@ -189,6 +189,14 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    packaging {
+        resources {
+            // bouncycastle 的 Picnic 预计算矩阵（lowmcL*.bin.properties）等只服务 PQC 签名，
+            // 本项目只用到对称/曲线原语，这三个文件压缩后仍占 1.2MB（压缩率 ~1%）。
+            excludes += "org/bouncycastle/**"
+        }
+    }
+
     // 界面语言在应用内切换（AppLanguage）：若改发 AAB，语言资源不能按设备语言拆分下发
     bundle {
         language {
@@ -253,9 +261,6 @@ androidComponents {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    // CarPlay 风格桌面：分页网格
-    implementation("androidx.viewpager2:viewpager2:1.1.0")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
     // AirPlay 配对密码学：X25519/Ed25519/ChaCha20-Poly1305/HKDF-SHA512
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     // CarWith 的 EasyConn 发现使用自定义 _EasyConn._tcp 记录；JmDNS 可显式绑定

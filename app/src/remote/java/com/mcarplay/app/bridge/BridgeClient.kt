@@ -369,12 +369,22 @@ object BridgeClient {
     }
 
     /**
+     * 安装唯一键：覆盖安装后 sourceDir（/data/app/~~xxx/<pkg>-yyy/base.apk）里的随机段
+     * 会变，拿它当缓存键比 versionName 可靠——日常包与诊断包都是 debug 签名，同一 base
+     * 版本的所有构建 versionName 相同（0.1.6-debug），用版本号当键会让新包继续命中旧
+     * APK 的 sha，hello 上报错误的 baseSha256，差分补丁在客户端被基线校验直接丢弃，
+     * 每次更新都退化成 15MB 全量下载。
+     */
+    private fun installKey(ctx: Context): String = ctx.applicationInfo.sourceDir
+
+    /**
      * 已安装 APK 的 sha256（差分基线）。15MB 哈希 ~50ms，只在进程首个 hello 时算一次
-     * （结果按版本号落 prefs，重连直接读缓存）；失败返回 null（服务器只走全量）。
+     * （结果按安装唯一键落 prefs，重连直接读缓存）；失败返回 null（服务器只走全量）。
      */
     private fun baseSha256(ctx: Context): String? =
         runCatching {
-            BridgePrefs.baseApkSha(ctx, BuildConfig.VERSION_NAME)?.let { return it }
+            val key = installKey(ctx)
+            BridgePrefs.baseApkSha(ctx, key)?.let { return it }
             val source = File(ctx.applicationInfo.sourceDir)
             val digest = MessageDigest.getInstance("SHA-256")
             source.inputStream().use { input ->
@@ -386,7 +396,7 @@ object BridgeClient {
                 }
             }
             val sha = digest.digest().joinToString("") { "%02x".format(it) }
-            BridgePrefs.setBaseApkSha(ctx, BuildConfig.VERSION_NAME, sha)
+            BridgePrefs.setBaseApkSha(ctx, key, sha)
             sha
         }.getOrNull()
 

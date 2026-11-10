@@ -89,7 +89,7 @@ object BridgePrefs {
     /** 重装前置位：新版本首次启动时弹「继续进入调试模式？」。 */
     fun resumePending(context: Context): Boolean = prefs(context).getBoolean(KEY_RESUME, false)
 
-    // ---- 差分基线 sha 缓存（版本键控：装新包后自然失效重算）----
+    // ---- 差分基线 sha 缓存（安装唯一键控：覆盖安装后 sourceDir 变化即失效重算）----
 
     fun baseApkSha(
         context: Context,
