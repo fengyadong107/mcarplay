@@ -25,8 +25,9 @@ class StreamDuplexStream(
     /**
      * 注意：read/write 不能共享一把锁——读线程会阻塞在 read() 里持锁等待数据，
      * 写线程将永久拿不到锁（真机蓝牙上实际触发过）。写入的并发安全由
-     * Iap2LinkChannel 的通道锁保证（所有写入都在 lock 内串行），读只发生在
-     * 唯一的读线程，蓝牙 socket 的输入/输出流彼此独立，跨线程读写是安全的。
+     * Iap2LinkChannel 的 writeLock 保证（取缓冲与写 socket 都在它里面串行，且**不持
+     * 通道锁**——写本身也能永久阻塞），读只发生在唯一的读线程，蓝牙 socket 的输入/
+     * 输出流彼此独立，跨线程读写是安全的。
      */
     override fun read(buffer: ByteArray): Int = input.read(buffer)
 

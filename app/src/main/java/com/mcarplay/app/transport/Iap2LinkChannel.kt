@@ -18,6 +18,9 @@ class Iap2LinkChannel(
 ) : Closeable {
     private val engine = Iap2LinkEngine()
     private val lock = Object()
+
+    /** 只护 socket 写：写不能持 [lock]（见 drainOutput 注释）。锁序固定 writeLock → lock。 */
+    private val writeLock = Object()
     private val controls = LinkedBlockingQueue<ByteArray?>()
     private val readyLatch = CountDownLatch(1)
     private val terminatedLatch = CountDownLatch(1)
@@ -103,12 +106,13 @@ class Iap2LinkChannel(
         bytes: ByteArray,
         awaitAck: Boolean = true,
     ): Boolean {
-        synchronized(lock) {
-            if (terminated) return false
-            val accepted = engine.sendControl(bytes, nowMillis(), awaitAck)
-            drainOutputLocked()
-            return accepted
-        }
+        val accepted =
+            synchronized(lock) {
+                if (terminated) return false
+                engine.sendControl(bytes, nowMillis(), awaitAck)
+            }
+        drainOutput()
+        return accepted
     }
 
     /** 取下一个控制载荷；超时或链路结束返回 null。 */
@@ -132,10 +136,8 @@ class Iap2LinkChannel(
 
     private fun runReader() {
         try {
-            synchronized(lock) {
-                engine.start(nowMillis())
-                drainOutputLocked()
-            }
+            synchronized(lock) { engine.start(nowMillis()) }
+            drainOutput()
             val buffer = ByteArray(4096)
             while (true) {
                 val count = stream.read(buffer)
@@ -149,9 +151,9 @@ class Iap2LinkChannel(
                     dumpInbound(buffer.copyOf(count))
                     engine.feed(buffer.copyOf(count), nowMillis())
                     processEventsLocked()
-                    drainOutputLocked()
                     signalReadyLocked()
                 }
+                drainOutput()
             }
         } catch (error: Throwable) {
             finish(error.message ?: error.javaClass.simpleName)
@@ -171,23 +173,24 @@ class Iap2LinkChannel(
 
     private fun runPacer() {
         while (!terminated) {
-            val deadline: Long?
-            synchronized(lock) {
-                if (terminated) return
-                engine.advanceTime(nowMillis())
-                processEventsLocked()
-                drainOutputLocked()
-                signalReadyLocked()
-                deadline = engine.nextDeadlineMillis()
-                if (deadline == null) {
+            val deadline =
+                synchronized(lock) {
+                    if (terminated) return
+                    engine.advanceTime(nowMillis())
+                    processEventsLocked()
+                    signalReadyLocked()
+                    engine.nextDeadlineMillis()
+                }
+            drainOutput()
+            if (deadline == null) {
+                synchronized(lock) {
                     try {
                         lock.wait(PACER_POLL_MILLIS)
                     } catch (_: InterruptedException) {
                         return
                     }
                 }
-            }
-            if (deadline != null) {
+            } else {
                 val sleep = (deadline - nowMillis()).coerceIn(1, PACER_POLL_MILLIS)
                 try {
                     Thread.sleep(sleep)
@@ -218,16 +221,32 @@ class Iap2LinkChannel(
         }
     }
 
-    private fun drainOutputLocked() {
-        val bytes = engine.takeOutput()
-        if (bytes.isEmpty()) return
-        dumpOutbound(bytes)
-        try {
-            stream.write(bytes)
-        } catch (error: IOException) {
-            finishLocked(error)
+    /**
+     * 把引擎积压的输出写出去。**写 socket 不持通道锁**。
+     *
+     * RFCOMM / 事件通道的写没有超时，对端不读、L2CAP 窗口耗尽时 `write` 会一直阻塞。
+     * 若持 [lock] 阻塞，读线程（入站 ACK 处理与 EOF 收尾）、节拍线程（重传/协商定时器）
+     * 和 `close()` 会被一起冻住，连对端断开都检测不到（`DuplexStream.kt` 记录过读方向
+     * 的同类踩坑）。写序由 [writeLock] 保证：取缓冲与写 socket 都在它里面，两个线程
+     * 不会交叉写，也不会乱序；锁序固定 writeLock → lock，反向不存在。
+     */
+    private fun drainOutput() {
+        synchronized(writeLock) {
+            val bytes =
+                synchronized(lock) {
+                    if (terminated) return
+                    engine.takeOutput()
+                }
+            if (bytes.isEmpty()) return
+            dumpOutbound(bytes)
+            try {
+                stream.write(bytes)
+            } catch (error: IOException) {
+                synchronized(lock) { finishLocked(error) }
+                return
+            }
+            synchronized(lock) { signalReadyLocked() }
         }
-        signalReadyLocked()
     }
 
     private fun dumpOutbound(bytes: ByteArray) {
