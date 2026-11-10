@@ -102,13 +102,16 @@ class MediaListenerService : NotificationListenerService() {
         }
 
     /** 上次封面提取键（会话+歌名+封面 uri）——getBitmap 每次反序列化，1s 轮询不能重复做。 */
+    @Volatile
     private var lastArtKey: String? = null
 
     /** 封面位图缓存（键不变时复用同一实例，保证 NowPlaying 的 equals 判稳）。 */
+    @Volatile
     private var cachedArt: android.graphics.Bitmap? = null
 
     /** 上次「键匹配但封面为空」的时刻：切歌瞬间 metadata 常不完整（歌名先到、
      *  封面字段滞后），空结果只保持 2 秒，之后重试直到封面就绪。 */
+    @Volatile
     private var artEmptyAt = 0L
 
     /** 封面 uri 解码专用单线程（串行；主线程不能做 IO/解码）。 */
@@ -194,34 +197,55 @@ class MediaListenerService : NotificationListenerService() {
         }
         lastArtKey = key
         cachedArt = null
-        val direct =
-            meta
-                ?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-                ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        if (direct != null) {
-            cachedArt = scaleArt(direct)
-            return cachedArt
-        }
         artEmptyAt = now
-        if (artUri != null) {
-            // 解码在专用线程；就绪后不主动 refresh——periodicRefresh 下一轮（≤1s）拉取
-            artExecutor.execute {
-                val bmp =
-                    runCatching {
-                        val input =
-                            if (artUri.startsWith("http")) {
-                                java.net.URL(artUri).openStream()
-                            } else {
-                                contentResolver.openInputStream(android.net.Uri.parse(artUri))
-                            }
-                        input?.use { android.graphics.BitmapFactory.decodeStream(it) }
-                    }.getOrNull()
-                if (bmp != null && key == lastArtKey) {
-                    cachedArt = scaleArt(bmp)
-                }
+        // getBitmap 是跨进程调用 + 位图反序列化（2000×2000 封面约 16MB），createScaledBitmap
+        // 也在主线程——两者都挪到封面线程。本轮先返回 null（无封面态），算好后主动
+        // refresh 一次把封面补上，不用等 periodicRefresh 的下一轮。
+        artExecutor.execute {
+            val direct =
+                runCatching {
+                    meta?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                        ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+                }.getOrNull()
+            val bmp = if (direct != null) scaleArt(direct) else artUri?.let(::decodeArtUri)
+            if (bmp != null && key == lastArtKey) {
+                cachedArt = bmp
+                mainHandler.post { refresh() }
             }
         }
         return null
+    }
+
+    /**
+     * 封面 uri → 位图：先整段读入（压缩后体积小），再按 `inSampleSize` 直接解出 ≤512px，
+     * 避免 2000×2000 的图先整张进内存再缩。
+     */
+    private fun decodeArtUri(uri: String): android.graphics.Bitmap? =
+        runCatching {
+            val bytes =
+                (
+                    if (uri.startsWith("http")) {
+                        java.net.URL(uri).openStream()
+                    } else {
+                        contentResolver.openInputStream(android.net.Uri.parse(uri))
+                    }
+                )?.use { it.readBytes() } ?: return@runCatching null
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val opts =
+                android.graphics.BitmapFactory.Options().apply {
+                    inSampleSize = artSampleSize(maxOf(bounds.outWidth, bounds.outHeight))
+                }
+            android.graphics.BitmapFactory
+                .decodeByteArray(bytes, 0, bytes.size, opts)
+                ?.let(::scaleArt)
+        }.getOrNull()
+
+    /** 让解码结果直接落在 ≤512px 的最小 2 的幂采样率。 */
+    private fun artSampleSize(maxSide: Int): Int {
+        var sample = 1
+        while (maxSide > 0 && maxSide / sample > 512) sample *= 2
+        return sample
     }
 
     /** 封面缩到 ≤512px（卡片显示 ~120dp，控制内存）。 */
