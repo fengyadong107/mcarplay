@@ -23,10 +23,12 @@ class BtLinkReplayTest {
     fun recordedSessionsReplayIdentically() {
         val fixtures = CarFixture.loadDirectory()
         val usable = fixtures.filter { it.btRounds.isNotEmpty() }
-        if (usable.isEmpty()) {
-            println("REPLAY: 无蓝牙 fixture（目录被 gitignore，本地用 tools/extract_car_fixtures.py 提取）——跳过")
-            return
-        }
+        // 用 assumeTrue 而不是 println+return：无样本时报表应显示 skipped，
+        // 而不是一条「全绿但 0 次断言」的假通过（2026-11-10 审查定谳）。
+        org.junit.Assume.assumeTrue(
+            "无蓝牙 fixture（app/src/test/resources/carplay/fixtures 未入册）——跳过，不计为通过",
+            usable.isNotEmpty(),
+        )
         val failures = ArrayList<String>()
         usable.forEach { fixture ->
             fixture

@@ -57,6 +57,7 @@ import com.mcarplay.app.net.CarPlayCtrlAdvertiser
 import com.mcarplay.app.net.CarPlayServiceBrowser
 import com.mcarplay.app.net.CtrlInviteGate
 import com.mcarplay.app.net.EndpointHosts
+import com.mcarplay.app.net.InviteRetryPolicy
 import com.mcarplay.app.net.StreamingInviteReconnect
 import com.mcarplay.app.net.WifiCarPlayConnector
 import com.mcarplay.app.net.WifiConnectCommand
@@ -3021,7 +3022,7 @@ object SessionController {
         endpoint: Iap2SenderSession.CarPlayEndpoint,
         source: String,
     ) {
-        if (inviteRetryCount >= MAX_INVITE_RETRIES) {
+        if (!InviteRetryPolicy.hasQuota(inviteRetryCount, MAX_INVITE_RETRIES)) {
             appendLog(">>> [$source] 已按车机邀请重连 $MAX_INVITE_RETRIES 次仍被拒——不再自动重试，请导出日志反馈")
             return
         }
@@ -3031,7 +3032,7 @@ object SessionController {
             val deadline = android.os.SystemClock.uptimeMillis() + INVITE_RETRY_WAIT_MS
             while (!connectCancelled && android.os.SystemClock.uptimeMillis() < deadline) {
                 val latest = ctrlAdvertiser?.lastInviteAtMillis ?: 0L
-                if (latest > baseline && !sessionStarting.get()) {
+                if (InviteRetryPolicy.shouldReconnect(latest, baseline, connectCancelled, sessionStarting.get())) {
                     appendLog(">>> [$source] 收到车机新邀请——第 $attempt 次重连 AirPlay")
                     onCarPlayEndpoint(endpoint, "$source/邀请重连")
                     return@run

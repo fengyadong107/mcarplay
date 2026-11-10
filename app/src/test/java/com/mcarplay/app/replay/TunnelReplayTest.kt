@@ -21,7 +21,10 @@ class TunnelReplayTest {
         val fixtures = CarFixture.loadDirectory()
         val usable = fixtures.filter { it.tunnelRx.isNotEmpty() }
         if (usable.isEmpty()) {
-            println("REPLAY: 无隧道 fixture——跳过")
+            org.junit.Assume.assumeTrue(
+                "无隧道 fixture（app/src/test/resources/carplay/fixtures 未入册）——跳过，不计为通过",
+                false,
+            )
             return
         }
         val failures = ArrayList<String>()

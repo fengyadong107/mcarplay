@@ -108,6 +108,60 @@ class Iap2LinkEngineTest {
      * 吃的是**下一帧的首字节 0xFF**，此后 FF5A 扫描再也对不齐，一个坏帧变成两个丢帧。
      * 本用例在旧代码下必然失败（合法帧收不到）。
      */
+    /**
+     * 发后不管（awaitAck=false）：不计入未确认清单、不重传，**链路不会因它没被 ACK 而死**。
+     *
+     * 这条分支是 0x4E0E 传输标识的保命符——奥迪 MIB3 对其他包毫秒级 ACK、唯独不认它，
+     * 重传看门狗曾据此在 +20s 杀掉整条蓝牙链路（真机事故）。此前零覆盖。
+     */
+    @Test
+    fun fireAndForgetControlIsNeitherRetransmittedNorKillsLink() {
+        val phone = Iap2LinkEngine(retransmissionTimeoutMillis = 100)
+        val accessory = Iap2LinkEngine(retransmissionTimeoutMillis = 100)
+        phone.start(0)
+        accessory.start(0)
+        exchangeUntilNormal(phone, accessory)
+        phone.takeOutput() // 丢掉握手尾声
+
+        assertTrue(phone.sendControl(Iap2Csm.encode(0x4E0E), 1_000, awaitAck = false))
+        assertTrue("首帧必须真的发出去", phone.takeOutput().isNotEmpty())
+
+        var now = 1_000L
+        repeat(10) {
+            now += 200
+            phone.advanceTime(now)
+            assertTrue("发后不管的包不该重传", phone.takeOutput().isEmpty())
+            assertEquals("发后不管的包不该把链路拖死", Iap2LinkEngine.State.NORMAL, phone.state)
+        }
+    }
+
+    /** 普通控制包：每个重传窗口到期重发一次，超过 maxRetransmissions 后拆链。 */
+    @Test
+    fun unacknowledgedControlRetransmitsThenDies() {
+        val phone = Iap2LinkEngine(retransmissionTimeoutMillis = 100)
+        val accessory = Iap2LinkEngine(retransmissionTimeoutMillis = 100)
+        phone.start(0)
+        accessory.start(0)
+        exchangeUntilNormal(phone, accessory)
+        accessory.takeOutput()
+
+        assertTrue(accessory.sendControl(Iap2Csm.encode(0x1D00), 1_000))
+        accessory.takeOutput() // 首发帧不喂给对端 → 永远等不到 ACK
+
+        var now = 1_000L
+        var retransmissions = 0
+        var guard = 0
+        while (accessory.state == Iap2LinkEngine.State.NORMAL && guard++ < 20) {
+            now += 200
+            accessory.advanceTime(now)
+            if (accessory.takeOutput().isNotEmpty() && accessory.state == Iap2LinkEngine.State.NORMAL) {
+                retransmissions++
+            }
+        }
+        assertEquals("重传耗尽必须拆链", Iap2LinkEngine.State.DEAD, accessory.state)
+        assertEquals("拆链前应重发 maxRetransmissions 次", 4, retransmissions)
+    }
+
     @Test
     fun corruptedPayloadDoesNotSwallowFollowingFrame() {
         val phone = Iap2LinkEngine()

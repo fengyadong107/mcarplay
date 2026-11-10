@@ -38,14 +38,17 @@ class CarFixture(
                     File("app/src/test/resources/carplay/fixtures"),
                 )
             val dir = roots.firstOrNull { it.isDirectory } ?: return emptyList()
+            // 解析失败**直接抛**：以前是 println 后当「少一个 fixture」跳过，坏掉的
+            // 入册样本会永远静默消失，测试照样全绿。
             return dir
                 .listFiles { f -> f.extension == "jsonl" }
                 .orEmpty()
                 .sortedBy { it.name }
-                .mapNotNull { file ->
-                    runCatching { parse(file) }.getOrElse {
-                        println("REPLAY: fixture 解析失败 ${file.name}: $it")
-                        null
+                .map { file ->
+                    try {
+                        parse(file)
+                    } catch (error: Exception) {
+                        throw IllegalStateException("fixture 解析失败 ${file.name}: $error", error)
                     }
                 }
         }
