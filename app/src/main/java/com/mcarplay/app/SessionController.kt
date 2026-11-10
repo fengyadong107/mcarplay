@@ -24,6 +24,7 @@ import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
 import com.mcarplay.app.carlife.CarLifeLauncher
+import com.mcarplay.app.carlife.CarLifeMultiTouchState
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
@@ -3607,22 +3608,26 @@ object SessionController {
                                             touchLogCount++
                                             val carLife = currentCarLifeSession
                                             if (carLife != null) {
-                                                val contact =
-                                                    contacts.firstOrNull { it.slot == 0 }
-                                                        ?: contacts.first()
-                                                val point =
-                                                    mapCarLifeTouch(
-                                                        x = contact.xPixels,
-                                                        y = contact.yPixels,
-                                                        sourceWidth = setup.displayWidth,
-                                                        sourceHeight = setup.displayHeight,
-                                                        targetWidth = carLife.videoWidth,
-                                                        targetHeight = carLife.videoHeight,
-                                                    )
-                                                if (point != null) {
-                                                    if (carLife.sendTouch(point.first, point.second, contact.down)) {
-                                                        ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
+                                                val mapped =
+                                                    contacts.mapNotNull { contact ->
+                                                        val point =
+                                                            mapCarLifeTouch(
+                                                                x = contact.xPixels,
+                                                                y = contact.yPixels,
+                                                                sourceWidth = setup.displayWidth,
+                                                                sourceHeight = setup.displayHeight,
+                                                                targetWidth = carLife.videoWidth,
+                                                                targetHeight = carLife.videoHeight,
+                                                            ) ?: return@mapNotNull null
+                                                        CarLifeMultiTouchState.Contact(
+                                                            slot = contact.slot,
+                                                            x = point.first,
+                                                            y = point.second,
+                                                            down = contact.down,
+                                                        )
                                                     }
+                                                if (mapped.isNotEmpty() && carLife.sendHidContacts(mapped)) {
+                                                    ReceiverDetectionRuntime.touch(client.currentEndpoint.observation)
                                                 }
                                             }
                                         } else if (report != null) {

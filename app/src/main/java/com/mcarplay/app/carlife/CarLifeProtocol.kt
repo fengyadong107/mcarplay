@@ -51,9 +51,29 @@ object CarLifeProtocol {
     const val MD_AES_SEED = 0x1006C
     const val MD_ENCRYPT_READY = 0x1006E
     const val VIDEO_ENCODER_INIT_DONE = 0x10008
+    /** 复合动作：负载带 MotionEvent action（指针索引在高字节），双指走这里。 */
+    const val TOUCH_ACTION = 425985 // 0x68001
     const val TOUCH_DOWN = 425986
     const val TOUCH_UP = 425987
     const val TOUCH_MOVE = 425988
+
+    /**
+     * [TOUCH_ACTION] 负载里的动作码 = Android MotionEvent action，
+     * 指针索引：`action or (index shl 8)`。
+     */
+    object TouchAction {
+        const val DOWN = 0
+        const val UP = 1
+        const val MOVE = 2
+        const val POINTER_DOWN = 5
+        const val POINTER_UP = 6
+        const val POINTER_INDEX_SHIFT = 8
+
+        fun withPointer(
+            base: Int,
+            pointerIndex: Int,
+        ): Int = base or (pointerIndex shl POINTER_INDEX_SHIFT)
+    }
 
     /** CarlifeCarHardKeyCode{int32 keycode=1}，与触摸同走 9340 通道。 */
     const val TOUCH_CAR_HARD_KEY_CODE = 0x68008
@@ -287,6 +307,23 @@ object CarLifeProtocol {
             out
         }
     }
+
+    /**
+     * `CarlifeTouchAction{action=1, x=2, y=3, pointerx=4, pointery=5}`，仅 [TOUCH_ACTION] 使用。
+     *
+     * pointerx/pointery 是**第二根手指**的坐标，必须和 x/y 一起发：CarWith 的
+     * `CarlifeTouchManager.onActionEvent` 用这两组点拼双指针 MotionEvent，
+     * 缺省 0 时第二指恒在 (0,0)，两指距离不变 → 缩放永不触发。
+     * （字段号取自 com.baidu.carlife.xiaomi 的 CarlifeTouchActionProto.writeTo）
+     */
+    fun touchActionPayload(
+        action: Int,
+        x: Int,
+        y: Int,
+        pointerX: Int = 0,
+        pointerY: Int = 0,
+    ): ByteArray = pbInt(1, action) + pbInt(2, x) + pbInt(3, y) +
+        if (pointerX != 0 || pointerY != 0) pbInt(4, pointerX) + pbInt(5, pointerY) else ByteArray(0)
 
     fun huInfoPayload(): ByteArray =
         pbString(1, "Android") +

@@ -62,6 +62,8 @@ class CarLifeSession(
     private val seenAudioKinds = java.util.Collections.synchronizedSet(mutableSetOf<Pair<CarLifeChannel, Int>>())
     private val unparsedAudio = java.util.concurrent.ConcurrentHashMap<CarLifeChannel, Long>()
     private val touchState = CarLifeTouchState()
+    private val multiTouchState = CarLifeMultiTouchState()
+    private var multiTouchWireLogCount = 0
 
     @Volatile
     private var endReported = false
@@ -207,6 +209,25 @@ class CarLifeSession(
                 height = videoHeight,
             ) ?: return false
         return sendTouchAction(action, x, y)
+    }
+
+    /** HID 多槽触点（已映射到视频坐标）→ 单点或 0x68001 复合动作。 */
+    fun sendHidContacts(contacts: List<CarLifeMultiTouchState.Contact>): Boolean {
+        val commands = multiTouchState.onFrame(contacts, videoWidth, videoHeight)
+        if (commands.isEmpty()) return false
+        var any = false
+        for (command in commands) {
+            if (command.serviceType == CarLifeProtocol.TOUCH_ACTION && multiTouchWireLogCount < 40) {
+                multiTouchWireLogCount++
+                log(
+                    "CARLIFE: 多指线 " +
+                        "action=0x${"%X".format(command.action)} (${command.x},${command.y}) " +
+                        "#$multiTouchWireLogCount",
+                )
+            }
+            if (writeWireTouch(command)) any = true
+        }
+        return any
     }
 
     fun requestKeyFrame(): Boolean {
@@ -406,9 +427,7 @@ class CarLifeSession(
         ) {
             // The router already decrypted and validated the negotiated format.
             val format = stateMachine.videoFormat ?: return
-            if (touchState.releasePoint() != null) {
-                sendTouchAction(CarLifeTouchAction.UP, videoWidth, videoHeight)
-            }
+            releaseActiveTouch()
             videoWidth = format.width
             videoHeight = format.height
         }
@@ -597,21 +616,33 @@ class CarLifeSession(
         x: Int,
         y: Int,
     ): Boolean {
-        if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
-        val socket = connector?.socket(CarLifeChannel.TOUCH) ?: return false
         val kind =
             when (action) {
                 CarLifeTouchAction.DOWN -> CarLifeProtocol.TOUCH_DOWN
                 CarLifeTouchAction.MOVE -> CarLifeProtocol.TOUCH_MOVE
                 CarLifeTouchAction.UP -> CarLifeProtocol.TOUCH_UP
             }
+        return writeWireTouch(CarLifeWireTouch(kind, x, y))
+    }
+
+    private fun writeWireTouch(command: CarLifeWireTouch): Boolean {
+        if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
+        val socket = connector?.socket(CarLifeChannel.TOUCH) ?: return false
         return runCatching {
             val cipher = stateMachine.payloadCipher
-            val payload = CarLifeProtocol.touchPayload(x, y)
+            val payload =
+                if (command.serviceType == CarLifeProtocol.TOUCH_ACTION) {
+                    CarLifeProtocol.touchActionPayload(
+                        command.action, command.x, command.y,
+                        command.pointerX, command.pointerY,
+                    )
+                } else {
+                    CarLifeProtocol.touchPayload(command.x, command.y)
+                }
             val body = if (cipher != null) cipher.encrypt(payload) else payload
             synchronized(socket) {
                 socket.getOutputStream().apply {
-                    write(CarLifeProtocol.encodeCommand(kind, body))
+                    write(CarLifeProtocol.encodeCommand(command.serviceType, body))
                     flush()
                 }
             }
@@ -643,6 +674,9 @@ class CarLifeSession(
     }
 
     private fun releaseActiveTouch() {
+        for (command in multiTouchState.releaseAll()) {
+            writeWireTouch(command)
+        }
         val (x, y) = touchState.releasePoint() ?: return
         sendTouchAction(CarLifeTouchAction.UP, x, y)
     }
