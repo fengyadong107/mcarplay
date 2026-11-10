@@ -154,10 +154,17 @@ android {
 
     buildTypes {
         release {
-            // **不做代码混淆**：本项目依赖反射（SystemProperties、Shizuku API）与
-            // 自定义 AIDL，R8 需要额外 keep 规则；首版先保证可运行，混淆留待后续。
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 + 资源裁剪：此前关着，17MB 的包里 bouncycastle 独占 36% 的类。
+            // 反射面已收敛（见 proguard-rules.pro）：平台类（SystemProperties 等）不受 R8
+            // 影响，自身类里只有 Shizuku UserService 与 AIDL 需要 keep。
+            // ⚠️ 首次开启必须在真机跑一轮完整会话（含 Shizuku 授权、远程调试桥），
+            // 这些路径下 R8 的问题只在运行时暴露。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
         }
         debug {
