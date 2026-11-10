@@ -110,7 +110,7 @@ object ScreenDimmer {
             return
         }
         if (!Settings.canDrawOverlays(context)) {
-            Log.w(TAG, "缺少悬浮窗权限，暗幕/触摸探针不可用（常亮不可用）")
+            Log.w(TAG, "缺少悬浮窗权限：暗幕与触摸探针不可用（常亮走 Shizuku 改屏幕超时，不受影响）")
             appContext = context.applicationContext
             windowManager = null
             handler = Handler(Looper.getMainLooper())

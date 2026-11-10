@@ -1320,13 +1320,15 @@ class MainActivity : AppCompatActivity() {
         if (ScreenDimmer.enabled) {
             if (!android.provider.Settings.canDrawOverlays(this)) {
                 promptOverlayPermission(getString(R.string.ma_always_on_already))
-            } else {
-                // attach 只挂触摸探针、不排自动暗幕定时器：自动暗幕/常亮由会话驱动
-                // （ScreenDimmer.setSessionActive），否则未连接时也会 45s 后变黑
-                // ——用户实测「会话断了还会启动暗幕」即此（2026-10-19）。
-                ScreenDimmer
-                    .attach(this)
             }
+            // attach 必须无条件调：它负责登记 appContext，而**常亮不依赖悬浮窗**
+            // （改屏幕超时走 Shizuku），只有暗幕窗口需要。以前整段都在「已授权」分支里，
+            // 用户点「暂不」后 appContext 为空 → setSessionActive(true) 静默早退，
+            // 常亮永远不生效（2026-11-10 真机复测发现）。
+            // attach 只挂触摸探针、不排自动暗幕定时器：自动暗幕/常亮由会话驱动
+            // （ScreenDimmer.setSessionActive），否则未连接时也会 45s 后变黑
+            // ——用户实测「会话断了还会启动暗幕」即此（2026-10-19）。
+            ScreenDimmer.attach(this)
         }
 
         CarInputClient.logSink = { line -> log(line) }
