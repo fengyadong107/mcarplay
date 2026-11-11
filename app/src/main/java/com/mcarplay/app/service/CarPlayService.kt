@@ -14,6 +14,7 @@ import com.mcarplay.app.R
 import com.mcarplay.app.SessionController
 import com.mcarplay.app.audio.SilentProjectionActivity
 import com.mcarplay.app.bt.AutoConnectPrefs
+import com.mcarplay.app.bt.BtAclTracker
 import com.mcarplay.app.carlife.CarLifeDiagnostics
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.compat.ReceiverCompatibility
@@ -31,6 +32,17 @@ class CarPlayService : Service() {
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** 「下车」收尾：有会话就断，没有就收前台与自检。 */
+    private fun endSessionForParkedCar() {
+        if (SessionController.isSessionRunning()) {
+            SessionController.disconnect(applicationContext, DiagnosticCode.BT_LINK_CLOSED)
+        } else {
+            CarLifeDiagnostics.stop()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
 
     /**
      * 息屏保活：CPU 唤醒锁维持编码/协议线程与 TCP 存活探测的响应。
@@ -67,14 +79,25 @@ class CarPlayService : Service() {
                 }
                 return START_STICKY
             }
-            fileLog("SVC: 收到「下车自动结束」——收起会话")
-            if (SessionController.isSessionRunning()) {
-                SessionController.disconnect(applicationContext, DiagnosticCode.BT_LINK_CLOSED)
-            } else {
-                CarLifeDiagnostics.stop()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+            // ACL 广播会抖动：2026-11-11 真机日志里 9 秒内「连上→断开→连上→断开」6 次，
+            // 每次断开都立刻拆会话、连上又重新拉起，白白重建 BT 监听/mDNS/Wi-Fi。
+            // 先等一小会儿，车机若又连回来就当这次断开没发生。
+            val flapAddress = intent.getStringExtra(EXTRA_ACL_ADDRESS)
+            if (!flapAddress.isNullOrBlank()) {
+                fileLog("SVC: 收到「下车自动结束」——先等 ${ACL_FLAP_GUARD_MS}ms 看车机是否只是抖了一下")
+                Bg.run("acl-flap-guard") {
+                    Thread.sleep(ACL_FLAP_GUARD_MS)
+                    if (BtAclTracker.observe(flapAddress)?.connected == true) {
+                        fileLog("AUTO: 车机蓝牙 ${ACL_FLAP_GUARD_MS}ms 内已重连——忽略本次「下车自动结束」")
+                        return@run
+                    }
+                    endSessionForParkedCar()
+                }
+                // 还没决定结束，先保持粘性
+                return START_STICKY
             }
+            fileLog("SVC: 收到「下车自动结束」——收起会话")
+            endSessionForParkedCar()
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_STOP_DIAGNOSTIC) {
@@ -262,6 +285,15 @@ class CarPlayService : Service() {
 
         /** 目标蓝牙 ACL 断开时检查是否自动收摊；Wi-Fi 视频已启动时保留会话。 */
         const val ACTION_AUTO_STOP_SESSION = "com.mcarplay.app.action.AUTO_STOP"
+
+        /** [ACTION_AUTO_STOP_SESSION] 携带的 ACL 断开设备地址（抖动判定用）。 */
+        const val EXTRA_ACL_ADDRESS = "com.mcarplay.app.extra.ACL_ADDRESS"
+
+        /**
+         * 下车判定前的去抖窗口：ACL 断开后等这么久，期间车机重连就不结束会话。
+         * 车机蓝牙抖动（充电/休眠/系统重启）常见于 3 秒内自愈；真下车时多等 4 秒无感。
+         */
+        const val ACL_FLAP_GUARD_MS = 4_000L
 
         /** CarWith-only connectivity self-test; keeps the process alive without CarPlay. */
         const val ACTION_START_DIAGNOSTIC = "com.mcarplay.app.action.START_CARLIFE_DIAGNOSTIC"

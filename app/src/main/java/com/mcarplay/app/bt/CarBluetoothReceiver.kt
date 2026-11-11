@@ -86,7 +86,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             runCatching {
                 context.startService(
                     Intent(context, CarPlayService::class.java)
-                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION),
+                        .setAction(CarPlayService.ACTION_AUTO_STOP_SESSION)
+                        // 带上地址：服务端据此做抖动去抖（断开后又连上就不结束会话）
+                        .putExtra(CarPlayService.EXTRA_ACL_ADDRESS, address),
                 )
             }
         }
