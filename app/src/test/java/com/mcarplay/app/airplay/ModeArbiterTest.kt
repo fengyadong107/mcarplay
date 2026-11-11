@@ -32,14 +32,13 @@ class ModeArbiterTest {
     }
 
     @Test
-    fun userInitiatedInitialTakeIsReportedThenRequestUiTakesBack() {
-        // 22:45 一轮：主屏 500/500 由车机持有；如实回 entity=2，用户点图标后拿回
+    fun userInitiatedInitialTakeStillClaimsScreen() {
+        // 开场 500/500 也先宣称手机持有：多数车机只有手机宣称持有才出画。
+        // 车机若不吃，会在 changeModes 里重新 take，届时如实让出（见下一条用例）。
         val arbiter = ModeArbiter()
         arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 500), resource(2, 1, 100, 100))))
-        assertFalse(arbiter.phoneOwnsScreen)
-        assertEquals(mapOf(1L to 2L, 2L to 1L), entities(arbiter))
-        assertFalse(arbiter.onUserRequestedUi().retake)
         assertTrue(arbiter.phoneOwnsScreen)
+        assertEquals(mapOf(1L to 1L, 2L to 1L), entities(arbiter))
         assertEquals(1L, arbiter.resourcesPayload().first()["permanentEntity"])
     }
 
@@ -121,7 +120,8 @@ class ModeArbiterTest {
         // VW4131 报告：主屏归车机、主音频被车机借用后，音频 SETUP 三档全部 400。
         // 真 iPhone 在 Main audio setting up 前先报 mainAudio controller。
         val arbiter = ModeArbiter()
-        arbiter.applyInitial(
+        // 主屏归车机由中途 take 到达（开场一律先宣称手机持有）
+        arbiter.onChangeModes(
             mapOf(
                 "resources" to
                     listOf(
@@ -145,7 +145,7 @@ class ModeArbiterTest {
     fun audioStreamStartRespectsUnborrowAndTakeConstraints() {
         // 车机借用主音频且 unborrowConstraint=1000（如倒车提示音）时不抢占，保持车机归属。
         val borrowed = ModeArbiter()
-        borrowed.applyInitial(
+        borrowed.onChangeModes(
             mapOf(
                 "resources" to
                     listOf(
@@ -212,7 +212,7 @@ class ModeArbiterTest {
         // 车机永久持有主屏后再 BORROW（倒车影像）：约束必须看 unborrowConstraint，
         // 不能回退到旧的 takeConstraint=100 把倒车画面抢走。
         val arbiter = ModeArbiter()
-        arbiter.applyInitial(mapOf("resources" to listOf(resource(1, 1, 500, 100))))
+        arbiter.onChangeModes(mapOf("resources" to listOf(resource(1, 1, 500, 100))))
         assertFalse(arbiter.phoneOwnsScreen)
         arbiter.onChangeModes(
             mapOf("resources" to listOf(resource(1, 3, 500, 100) + ("unborrowConstraint" to 1000L))),

@@ -190,7 +190,8 @@ internal class ModeArbiter {
         val requests = container?.get("resources") as? List<*> ?: return "无资源请求，保持 ${describe()}"
         for (entry in requests) {
             val request = entry as? Map<*, *> ?: continue
-            val resource = resources[(request["resourceID"] as? Number)?.toLong()] ?: continue
+            val resourceId = (request["resourceID"] as? Number)?.toLong() ?: continue
+            val resource = resources[resourceId] ?: continue
             val previousOwner = resource.owner
             val type = (request["transferType"] as? Number)?.toInt() ?: continue
             val priority = (request["transferPriority"] as? Number)?.toInt() ?: PRIORITY_NICE_TO_HAVE
@@ -200,12 +201,15 @@ internal class ModeArbiter {
                 (request["unborrowConstraint"] as? Number)?.toInt() ?: borrowConstraint
             when (type) {
                 TRANSFER_TAKE ->
-                    // 开场 niceToHave 的 take = 「没人要就先放车机」：手机要，就归手机（旧行为，22:46 一轮实测可出画）
-                    if (initial && priority < PRIORITY_USER_INITIATED) {
+                    // 主屏开场一律先宣称手机持有（v0.1.6 及以前的行为）：多数车机只有收到
+                    // 「手机持有主屏」才出画；帕萨特 2025 会无视并持续要帧，但它能靠
+                    // changeModes 让出 / 点图标 retake 兜底。中途的 take 与音频仍如实回报。
+                    if (initial && (resourceId == SCREEN || priority < PRIORITY_USER_INITIATED)) {
                         resource.owner = Entity.CONTROLLER
                         resource.permanent = Entity.CONTROLLER
                         resource.borrowed = false
-                        resource.takeConstraint = CONSTRAINT_ANYTIME
+                        resource.takeConstraint = takeConstraint
+                        resource.borrowConstraint = borrowConstraint
                     } else {
                         resource.owner = Entity.ACCESSORY
                         resource.permanent = Entity.ACCESSORY
