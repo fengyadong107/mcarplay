@@ -1405,12 +1405,14 @@ class MainActivity : AppCompatActivity() {
     private fun tickHero() {
         val diagnosis = ConnectionDiagnostics.timeline.snapshot()
         val latest = ConnectionDiagnostics.latestSnapshot()
-        // 还没有连接记录时不占首页空间：提示语与导出入口都等有报告后再出现（诊断页另有导出入口）。
+        // 还没有连接记录时不占空间：状态提示语等有报告后再出现。
+        // 但**导出入口常驻**：release 包 debuggable=false，run-as 读不到内部日志，
+        // 这个按钮是拷出日志的唯一出口（2026-11-11）；以前只在有报告时显示，
+        // 用户连不上时恰好没有报告，反而导不出来。
         val diagnosticStatus = findViewById<TextView>(R.id.diagnosticStatus)
         diagnosticStatus.text = latest?.let { DiagnosticText.summary(this, it) }.orEmpty()
-        val reportVisibility = if (latest == null) View.GONE else View.VISIBLE
-        diagnosticStatus.visibility = reportVisibility
-        findViewById<View>(R.id.btnExportDiagnostics).visibility = reportVisibility
+        diagnosticStatus.visibility = if (latest == null) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.btnExportDiagnostics).visibility = View.VISIBLE
         updateConnectionSteps(latest)
         val s =
             when {

@@ -280,7 +280,7 @@
                     android:minHeight="44dp"
                     android:paddingHorizontal="16dp"
                     android:text="@string/export_diagnostics"
-                    android:visibility="gone"
+                    android:visibility="visible"
                     android:textColor="@color/m3_primary"
                     android:textSize="12sp" />
             </LinearLayout>
