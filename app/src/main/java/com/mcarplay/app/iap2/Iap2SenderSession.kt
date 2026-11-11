@@ -753,9 +753,19 @@ class Iap2SenderSession(
                 val frame = recvFrame(remaining)
                 if (frame == null) {
                     if (!channel.isAlive) {
-                        log("iap2 MFi 挑战期间链路断开（${size}B，对端不接受该长度）——记入该车机被拒档位")
-                        // 硬拒绝：链路级证据，推翻「该长度=上次成功」的记忆（防误记锁死）
-                        receiverKey?.let { MfiLengthMemory.recordHardRejected(context, it, size) }
+                        // 链路断开 ≠ 这个长度被拒：真拒绝会走 0xAA04（gotFailure 分支）。
+                        // 2026-11-11 真机日志里写的是「对端不接受该长度」并记入被拒档位，可两行
+                        // 之后就是 `bt socket closed`，同一分钟前该车机还接受过两次 32B——
+                        // 把链路故障记成「长度被拒」，会让后续会话无端避开该档位。
+                        // 只有**记忆里那个「曾成功」的长度**一挑战就断链才算强证据：那种情况
+                        // 记忆本身就是错的（迟到应答被记到当前档头上），必须推翻，否则永久锁死
+                        // （2026-10-24 DiPlay 实测：32B 迟到应答记成 20B 成功，之后每轮 20B 断链）。
+                        if (pinnedLength != null && pinnedLength == size) {
+                            log("iap2 MFi 挑战期间链路断开（${size}B，记忆里该长度曾成功）——推翻该记忆")
+                            receiverKey?.let { MfiLengthMemory.recordHardRejected(context, it, size) }
+                        } else {
+                            log("iap2 MFi 挑战期间链路断开（${size}B）——按链路故障处理，不计入被拒档位")
+                        }
                         return
                     }
                     continue
