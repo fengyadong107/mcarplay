@@ -1232,14 +1232,21 @@ object SessionController {
                     phoneScreenOff = true
                     appendLog("SCREEN: 真息屏已进入（暗幕承载触摸检测——点暗幕唤醒，无需按电源键）")
                 } else {
-                    // 暗幕不可用（缺悬浮窗权限）降级裸断电：无触摸唤醒手段，只能按电源键
+                    // 暗幕不可用降级裸断电：无触摸唤醒手段，只能按电源键。
+                    // 先说明不可用的真实原因，别把「缺悬浮窗权限」笼统算到 ROM 头上。
+                    val why =
+                        if (!android.provider.Settings.canDrawOverlays(ctx)) {
+                            "缺「显示在其他应用上层」权限"
+                        } else {
+                            "暗幕未附着"
+                        }
                     val ok = CarInputClient.setPhysicalScreenPower(false)
                     phoneScreenOff = ok
                     appendLog(
                         if (ok) {
-                            "SCREEN: 物理屏已断电（暗幕不可用——无触摸唤醒手段，按电源键两次可恢复）"
+                            "SCREEN: 物理屏已断电（$why——无触摸唤醒手段，按电源键两次可恢复）"
                         } else {
-                            "SCREEN: 物理屏断电失败（ROM 未给 shell 权限 / 取不到 display token）"
+                            "SCREEN: 物理屏断电失败（$why；shell 也无权限取 display token）"
                         },
                     )
                 }

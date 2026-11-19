@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.mcarplay.app.diagnostics.ConnectionDiagnostics
 import com.mcarplay.app.i18n.AppLanguage
+import com.mcarplay.app.ui.ScreenDimmer
 import com.mcarplay.app.util.DebugFileLog
 
 /**
@@ -22,6 +23,13 @@ open class SenderApp : Application() {
         ConnectionDiagnostics.initialize(this)
         // 界面语言：未选过时落到默认中文（不跟随系统语言）
         AppLanguage.applyAtStartup(this)
+        // 后台自动连接不经过 MainActivity：暗幕/真息屏只在那里 attach 会静默失效
+        // （2026-11-19 报告 5/5 会话「物理屏断电失败」、屏幕整程常亮）。
+        // 常亮开关在这里先读一次，否则 Activity 没跑时默认值会盖过用户设置。
+        ScreenDimmer.enabled =
+            getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+                .getBoolean("alwaysOn", true)
+        ScreenDimmer.attach(this)
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching { ConnectionDiagnostics.uncaught(thread, throwable) }
             Log.e(TAG, "未捕获异常（线程 ${thread.name}，已吞掉保进程）", throwable)
