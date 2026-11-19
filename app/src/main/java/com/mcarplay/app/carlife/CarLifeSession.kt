@@ -110,8 +110,9 @@ class CarLifeSession(
     var entryBlockedSuspected: Boolean = false
         private set
 
+    /** 仅在本轮确有归类失败时写入；正常结束为 null，报告里不能记成 CARWITH_FAILED。 */
     @Volatile
-    var endDiagnosticCode: DiagnosticCode = DiagnosticCode.CARWITH_FAILED
+    var endDiagnosticCode: DiagnosticCode? = null
         private set
 
     @Volatile
@@ -142,7 +143,7 @@ class CarLifeSession(
         return "schema=1 run=$sourceRun running=${running.get() && !endReported} failed=$endReported " +
             "elapsedMs=$elapsed state=${state.name} " +
             "entry=$entryResult route=$entryRoute background=$entryLaunchedInBackground " +
-            "entryBlockedSuspected=$entryBlockedSuspected code=${endDiagnosticCode.name} " +
+            "entryBlockedSuspected=$entryBlockedSuspected code=${endDiagnosticCode?.name ?: "NONE"} " +
             "commandFrames=$commandFramesReceived carwithNotification=[${notificationProbeSummary()}] " +
             "listeners=[${connector?.diagnosticSummary() ?: lastChannelSummary}] video=${videoInfo()} ${stats.snapshot().summary()}"
     }

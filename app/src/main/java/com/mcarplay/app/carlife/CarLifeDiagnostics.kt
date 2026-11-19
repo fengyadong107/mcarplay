@@ -46,7 +46,7 @@ object CarLifeDiagnostics {
                 },
                 onEnded = { reason ->
                     attempt?.let {
-                        val code = created?.endDiagnosticCode ?: DiagnosticCode.CARWITH_FAILED
+                        val code = created?.endDiagnosticCode ?: DiagnosticCode.VIDEO_CLOSED
                         lastCode = code
                         ConnectionDiagnostics.selfTest.finish(it, code, true, reason)
                     }

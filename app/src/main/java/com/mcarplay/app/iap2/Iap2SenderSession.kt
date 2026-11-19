@@ -248,7 +248,11 @@ class Iap2SenderSession(
     fun run(timeoutMillis: Long = 60_000L): CarPlayEndpoint {
         val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
         if (!channel.awaitReady(remainingMillis(deadline))) {
-            throw IOException("iAP2 链路协商超时")
+            // awaitReady 对「等满超时」和「等待期间对端关链」都返回 false；后者不是超时，
+            // 报告里必须分开，否则会把车机立即挂断误诊成协商慢。
+            throw IOException(
+                if (channel.awaitTerminated(0)) "iAP2 链路在对端关闭（协商阶段）" else "iAP2 链路协商超时",
+            )
         }
         log("iap2 link ready peerMaxControl=${channel.peerMaxControlPayload()}")
         reached(ConnectionMilestone.BT_LINK)

@@ -147,10 +147,11 @@ class CarLifeSessionTest {
         assertEquals(DiagnosticCode.CARWITH_PROTOCOL_SILENT, session.endDiagnosticCode)
     }
 
+    /** 新会话默认没有失败码：正常结束不得记成 CARWITH_FAILED（报告曾据此把正常断流标成失败）。 */
     @Test
-    fun newSessionEndsWithGenericCarWithCode() {
+    fun newSessionHasNoFailureCode() {
         val session = CarLifeSession(Application(), onAccessUnit = {}, onEnded = {}, log = {})
-        assertEquals(DiagnosticCode.CARWITH_FAILED, session.endDiagnosticCode)
+        assertNull(session.endDiagnosticCode)
     }
 
     @Test

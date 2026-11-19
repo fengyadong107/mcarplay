@@ -1,5 +1,6 @@
 package com.mcarplay.app.transport
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -40,5 +41,25 @@ class Iap2LinkChannelTest {
         assertTrue("引擎启动后应立刻有帧写出并阻塞", stream.writeStarted.await(2, TimeUnit.SECONDS))
         channel.close()
         // 没超时即说明 close() 没有被阻塞中的写卡住
+    }
+
+    /** 对端在协商阶段直接关闭：awaitReady 立刻 false，且能判定为「已终止」而不是「超时」。 */
+    @Test(timeout = 5_000)
+    fun closedPeerFailsReadyImmediately() {
+        val channel = Iap2LinkChannel(ClosedStream(), name = "closed-peer")
+        val startedAt = System.nanoTime()
+        assertFalse(channel.awaitReady(5_000))
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        assertTrue("对端关闭应立即返回，实际等了 ${elapsedMs}ms", elapsedMs < 1_000)
+        assertTrue("应判定为已终止，日志才能区分「对端关闭」与「协商超时」", channel.awaitTerminated(0))
+        channel.close()
+    }
+
+    private class ClosedStream : DuplexStream {
+        override fun read(buffer: ByteArray): Int = -1
+
+        override fun write(bytes: ByteArray) = Unit
+
+        override fun close() = Unit
     }
 }

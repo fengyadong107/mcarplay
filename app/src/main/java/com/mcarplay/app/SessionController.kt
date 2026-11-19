@@ -942,13 +942,22 @@ object SessionController {
                     // 旧源的迟到回调不能停掉新一轮的发送端
                     val output = carLifeOutput.takeIf { currentCarLifeSession === session }
                     if (output != null) {
-                        ConnectionDiagnostics.timeline.finish(output.attempt, session.endDiagnosticCode, true, reason)
+                        ConnectionDiagnostics.timeline.finish(
+                            output.attempt,
+                            session.endDiagnosticCode ?: DiagnosticCode.VIDEO_CLOSED,
+                            true,
+                            reason,
+                        )
                         appendLog("CARLIFE: 会话结束 - $reason")
                         nativeAudioBridge?.stop()
                         output.sender.stop()
                     } else {
                         appendLog("CARLIFE: 未接入推流的旧会话结束 - $reason")
                     }
+                    // 车机主动收尾（无失败码）时七路已关闭、CarWith 侧不留会话，不能再算「残留」：
+                    // 否则下一次连接的 force-stop 会白白重启 CarWith，丢掉它记住的音乐应用等内存状态。
+                    // 只有带失败码的中断（如命令通道解密失败）才保留标记。
+                    if (session.endDiagnosticCode == null) appContext?.let(CarWithSessionFlag::clear)
                     releaseCarLifeSession(session)
                 },
                 onAudioEvent = onAudioEvent@{ channel, event ->
