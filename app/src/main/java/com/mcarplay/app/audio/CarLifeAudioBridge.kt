@@ -23,6 +23,11 @@ class CarLifeAudioBridge(
     private var accepted = 0L
     private var dropped = 0L
 
+    /** 最近一次收到 CarWith 媒体 PCM 的时刻（uptimeMillis）；0 = 本次会话尚未播放。 */
+    @Volatile
+    var lastMediaPcmAtMs: Long = 0L
+        private set
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         sender.startExternalSource()
@@ -92,6 +97,7 @@ class CarLifeAudioBridge(
             flushPrompts()
             return
         }
+        if (channel == CarLifeChannel.MEDIA) lastMediaPcmAtMs = android.os.SystemClock.uptimeMillis()
         val converter =
             converters[channel]?.takeIf { it.sourceRate == event.sampleRate && it.sourceChannels == event.channels }
                 ?: PcmResampler(event.sampleRate, event.channels, targetSampleRate).also {

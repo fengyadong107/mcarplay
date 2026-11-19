@@ -267,6 +267,9 @@ object SessionController {
     private val autoPlayHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val autoPlayTimeout = Runnable { stopAutoPlayWatch() }
 
+    /** 主动起播等 CarWith 视频就绪的上限；冷启动可能远慢于 2s。 */
+    private const val AUTO_PLAY_READY_TIMEOUT_MS = 25_000L
+
     /**
      * 「上车自动播放音乐」关闭时，在 CarWith 连接后的一小段窗口内抑制自动播放：
      *  - 前 [AutoPlaySuppressor.KEY_WINDOW_MILLIS] 内丢弃车机的播放键；
@@ -301,6 +304,93 @@ object SessionController {
                     "通知使用权未授予，无法识别自行开始的音乐"
                 },
         )
+    }
+
+    /**
+     * 开关打开时的主动起播。CarWith 的音乐走原生 PCM，不产生系统媒体会话/通知，普通媒体键
+     * 无法恢复；在 CarWith 视频就绪后用「媒体开始」硬按键（31）起播一次，并等媒体 PCM 确认。
+     * 无法确认媒体卡是否可见，因此不注入触摸。开关关闭时仍走 [armAutoPlaySuppression]。
+     */
+    private fun armAutoPlayBehavior(session: CarLifeSession) {
+        val context = appContext ?: return
+        if (!MediaPrefs.autoPlayOnConnect(context)) {
+            armAutoPlaySuppression()
+            return
+        }
+        if (!audioEnabledForSession) {
+            appendLog("AUTO-PLAY: 本次连接未开启车机侧声音，不主动起播")
+            return
+        }
+        Bg.run("auto-play-start") {
+            try {
+                val readyDeadline = SystemClock.uptimeMillis() + AUTO_PLAY_READY_TIMEOUT_MS
+                Thread.sleep(2_000L)
+                if (currentCarLifeSession !== session) return@run
+                // 硬按键在 VIDEO_RUNNING 之前会被 CarWith 静默拒绝；冷启动可能远慢于 2s。
+                if (!awaitVideoRunning(session, readyDeadline)) {
+                    appendLog("AUTO-PLAY: CarWith 视频未就绪（等待超时），跳过自动起播")
+                    return@run
+                }
+                var bridge = nativeAudioBridge
+                while (bridge == null && SystemClock.uptimeMillis() < readyDeadline) {
+                    Thread.sleep(500L)
+                    if (currentCarLifeSession !== session) return@run
+                    bridge = nativeAudioBridge
+                }
+                if (bridge == null) {
+                    // 此入口只用于 CarWith；桥未建立可能是音频协商失败，不能误播手机其他媒体。
+                    appendLog("AUTO-PLAY: CarWith 音频桥未就绪，跳过自动起播")
+                    return@run
+                }
+                if (bridge.lastMediaPcmAtMs > 0L) {
+                    appendLog("AUTO-PLAY: CarWith 媒体已在播放，跳过")
+                    return@run
+                }
+                if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
+                    appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键，等待媒体 PCM")
+                    if (awaitMediaPcm(session, bridge, 6_000L)) {
+                        appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体开始键）")
+                        return@run
+                    }
+                }
+                appendLog("AUTO-PLAY: 未能自动起播（可在车机上手动点播放键）")
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+    }
+
+    /** 等待 CarWith 媒体 PCM 出现；true = 已开始播放。 */
+    private fun awaitMediaPcm(
+        session: CarLifeSession,
+        bridge: CarLifeAudioBridge,
+        timeoutMs: Long,
+    ): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (currentCarLifeSession !== session) return false
+            if (bridge.lastMediaPcmAtMs > 0L) return true
+            Thread.sleep(200L)
+        }
+        return bridge.lastMediaPcmAtMs > 0L && currentCarLifeSession === session
+    }
+
+    /** CarWith 冷启动可能慢于 2s；等视频阶段最多 25s（与连接等待上限一致）。 */
+    private fun awaitVideoRunning(
+        session: CarLifeSession,
+        deadlineMs: Long,
+    ): Boolean {
+        var logged = false
+        while (SystemClock.uptimeMillis() < deadlineMs) {
+            if (currentCarLifeSession !== session) return false
+            if (session.isVideoRunning()) return true
+            if (!logged) {
+                appendLog("AUTO-PLAY: 等待 CarWith 视频就绪（最多 25s）")
+                logged = true
+            }
+            Thread.sleep(200L)
+        }
+        return session.isVideoRunning() && currentCarLifeSession === session
     }
 
     private fun stopAutoPlayWatch() {
@@ -4048,7 +4138,7 @@ object SessionController {
                                     if (videoStarted) carLifeOutput = output
                                     // 在 CarWith 启动前布防：CarWith 可能在 start() 内就恢复媒体，
                                     // 启动后再取 nowPlaying 会把自动播放误当成“连接前已在播放”。
-                                    if (videoStarted) armAutoPlaySuppression()
+                                    if (videoStarted) armAutoPlayBehavior(createdCarLife)
                                     val carLifeStarted = videoStarted && createdCarLife.start()
                                     appendLog(
                                         "MODE: CarWith ${if (carLifeStarted) "已请求连接，等待真实视频" else "连接请求失败"} " +

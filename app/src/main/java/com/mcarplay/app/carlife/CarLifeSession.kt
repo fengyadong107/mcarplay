@@ -230,6 +230,9 @@ class CarLifeSession(
         return any
     }
 
+    /** CarWith 的硬按键/触摸在进入 VIDEO_RUNNING 之前会被静默拒绝。 */
+    fun isVideoRunning(): Boolean = stateMachine.state == CarLifeStateMachine.State.VIDEO_RUNNING
+
     fun requestKeyFrame(): Boolean {
         if (stateMachine.state != CarLifeStateMachine.State.VIDEO_RUNNING) return false
         return sendCommand(
