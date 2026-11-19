@@ -3307,7 +3307,12 @@ class AirPlayClient(
     private var unmatchedMessages = 0
 
     private fun failAllPending(reason: String) {
-        val waiting = pendingResponses.values.toList()
+        // ConcurrentHashMap 的 values.toList() 在并发 remove 时走单元素快路径，会抛
+        // NoSuchElementException（2026-11-18 真机栈顶 ConcurrentHashMap$ValueIterator.next，
+        // 读线程死亡且 clear/RTSP_CLOSED 派发被跳过）。forEach 是弱一致遍历，不抛。
+        val waiting =
+            java.util.ArrayList<java.util.concurrent.LinkedBlockingQueue<Pair<String, ByteArray>>>()
+        pendingResponses.forEach { _, queue -> waiting += queue }
         pendingResponses.clear()
         if (waiting.isEmpty()) return
         log("AIRPLAY: $reason——唤醒 ${waiting.size} 个待响应请求")
