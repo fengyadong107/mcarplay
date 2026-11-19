@@ -185,9 +185,6 @@ class Iap2SenderSession(
     private fun accessoryDeclaresReceive(messageId: Int): Boolean? = if (!receiveListDeclared) null else messageId in accessoryReceiveIds
 
     private companion object {
-        /** 等 StartHID 的窗口：xcertplay 会发（订阅后立即到），DiPlay 不发。 */
-        const val HID_WAIT_NANOS = 2_000_000_000L
-
         /** 保活线程被中断后等链路关闭的上限（需大于 BT 退役时 0xEA01 的冲刷宽限）。 */
         const val INTERRUPTED_PUMP_GRACE_MILLIS = 1_000L
 
@@ -411,6 +408,12 @@ class Iap2SenderSession(
                             )
                         if (wifiConfiguration == null && receiverInvited?.invoke() == true) {
                             log("iap2 0x5703 未到但车机已在 WiFi 上发 ctrl 邀请——停止等待凭据，转入兜底")
+                            break
+                        }
+                        if (wifiConfiguration == null && hasPendingMessage(Iap2MessageIds.CARPLAY_START_SESSION)) {
+                            // StartHID 窗口内早到的 0x4301 自带 AP 信息：不必再等 0x5703，
+                            // 否则要空等到整轮 deadline 才用得上这个端点（奔驰 MBUX 2026-11-19）。
+                            log("iap2 0x4301 已到（早于 0x5703）——停止等待旧协议凭据，改用 0x4301 自带 AP 信息")
                             break
                         }
                         if (!channel.isAlive) break
@@ -966,6 +969,9 @@ class Iap2SenderSession(
         expectOrNull(messageId, deadline)
             ?: throw IOException("等待 0x${messageId.toString(16)} 超时")
 
+    /** 暂存区里是否已有该消息（早到帧）：只读判断，不消费。 */
+    private fun hasPendingMessage(messageId: Int): Boolean = pendingFrames.any { it.messageId == messageId }
+
     /**
      * 同 [expect]，但超时返回 null（用于可选消息）。非预期帧进暂存区供后续消费。
      *
@@ -1008,39 +1014,28 @@ class Iap2SenderSession(
     private fun awaitOptionalHid(deadline: Long) {
         // 声明清单里没有 StartHID 就不等（DiPlay/奥迪实测均不发，旧流程每轮白等 2s）。
         if (accessoryDeclaresSend(Iap2MessageIds.START_HID) == false) {
-            log("iap2 车机未声明会发 0x6800 StartHID——跳过 2s 等待")
+            log(startHidSkipLine(declaresSend = false))
             return
         }
-        val hidWindowNanos = minOf(System.nanoTime() + HID_WAIT_NANOS, deadline)
-        while (true) {
-            val remaining = (hidWindowNanos - System.nanoTime()) / 1_000_000L
-            if (remaining <= 0) {
-                log("iap2 未收到 0x6800（该接收端不发 StartHID，继续）")
-                return
-            }
-            val frame = recvFrame(remaining)
-            if (frame == null) {
-                if (!channel.isAlive) return // 链路已死：交给后续 expect 报出明确错误
-                continue
-            }
-            when (frame.messageId) {
-                Iap2MessageIds.START_HID -> {
-                    log("iap2 rx=0x6800 start-hid bytes=${frame.body.size}")
-                    send(
-                        Iap2MessageIds.DEVICE_HID_REPORT,
-                        Iap2Csm.u16(0, 0),
-                        Iap2Csm.param(1, byteArrayOf(0)),
-                    )
-                    return
-                }
-
-                else ->
-                    log(
-                        "iap2 rx=0x${frame.messageId.toString(16).padStart(4, '0')} " +
-                            "(${Iap2MessageIds.nameOf(frame.messageId)})",
-                    )
-            }
+        // 声明会发（或没有清单可判）才等窗口；超时文案必须区分这两种情形——
+        // 声明会发却没到时写「该接收端不发 StartHID」会误导排查（issue #66，
+        // 2026-11-15 保时捷 NEW 轮的实测：声明 StartHID=会发，2s 内未到）。
+        val hidWindowNanos = minOf(System.nanoTime() + START_HID_WAIT_NANOS, deadline)
+        // 必须走 expectOrNull：自己 recvFrame 会把非 0x6800 帧直接丢掉。
+        // 2026-11-19 奔驰 MBUX 实车日志：0x4301 在 StartHID 窗口内先到（车机随后 34 秒才重发），
+        // 旧实现把它当普通日志吞掉，凭据阶段只能空等 8 秒兜底。expectOrNull 会把非预期帧
+        // 暂存，供后续 0x5703 / 0x4301 阶段按原顺序消费。
+        val hid = expectOrNull(Iap2MessageIds.START_HID, hidWindowNanos)
+        if (hid == null) {
+            if (channel.isAlive) log(startHidTimeoutLine(declaresSend = accessoryDeclaresSend(Iap2MessageIds.START_HID)))
+            return
         }
+        log("iap2 rx=0x6800 start-hid bytes=${hid.body.size}")
+        send(
+            Iap2MessageIds.DEVICE_HID_REPORT,
+            Iap2Csm.u16(0, 0),
+            Iap2Csm.param(1, byteArrayOf(0)),
+        )
     }
 
     /**
@@ -1354,6 +1349,44 @@ internal enum class CredentiallessFallback {
     /** 没有任何线索：拆链。 */
     ABORT,
 }
+
+/**
+ * 等 StartHID（0x6800）的窗口：xcertplay 会发且订阅后立即到，DiPlay 不发。
+ *
+ * 提到文件级是为了让文案函数与测试共用同一数值：窗口长度本身就是可测契约
+ * （声明会发却未到 vs 没有清单可判，两条路径等的是同一个窗口）。
+ */
+internal const val START_HID_WAIT_NANOS = 2_000_000_000L
+
+/**
+ * 车机 0x1D01 声明**不会**发 StartHID：跳过等待。
+ *
+ * 与 [startHidTimeoutLine] 分开是这次改动的全部目的——旧实现把两条路径写成
+ * 同一句「该接收端不发 StartHID」，于是"声明确实会发但 2s 内没到"这一形态
+ * （issue #66，2026-11-15 保时捷 NEW 轮实测）在报告里被误记成"该车机不发"。
+ */
+internal fun startHidSkipLine(declaresSend: Boolean?): String =
+    when (declaresSend) {
+        false -> "iap2 车机未声明会发 0x6800 StartHID——跳过 ${START_HID_WAIT_NANOS / 1_000_000_000}s 等待"
+        // 没有清单可判（声明未知）时走的是等待分支，不该调用本函数；保留可解释文案。
+        else -> "iap2 车机未声明会发 0x6800 StartHID（无可用清单）——跳过 ${START_HID_WAIT_NANOS / 1_000_000_000}s 等待"
+    }
+
+/**
+ * 等满 StartHID 窗口仍未收到 0x6800 时的文案，必须区分「声明会发」与「无清单可判」。
+ *
+ * 这两种情形都不中止流程（继续走 WiFi 交换），但归因完全不同：前者是车机声明
+ * 与实际行为不一致，后者只是本应用没有依据、按保守策略等了一个窗口。
+ */
+internal fun startHidTimeoutLine(declaresSend: Boolean?): String =
+    when (declaresSend) {
+        true ->
+            "iap2 0x6800 StartHID 声明会发，但 ${START_HID_WAIT_NANOS / 1_000_000_000}s 内未到——继续" +
+                "（车机声明与实际行为不一致；HID 不是本应用建立 CarPlay 会话的前置条件）"
+        false -> "iap2 车机未声明会发 0x6800 StartHID——跳过 ${START_HID_WAIT_NANOS / 1_000_000_000}s 等待"
+        null ->
+            "iap2 0x6800 StartHID 无清单可判，${START_HID_WAIT_NANOS / 1_000_000_000}s 内未收到——继续（保守等待结束）"
+    }
 
 internal fun credentiallessFallback(
     knownSsid: String?,

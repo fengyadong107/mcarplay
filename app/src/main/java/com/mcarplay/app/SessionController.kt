@@ -499,6 +499,9 @@ object SessionController {
     @Volatile
     var audioSender: AudioSender? = null
 
+    /** 音频通道启动 single-flight 闸门（见 [startAudioChannel]）。 */
+    private val audioStartGate = AudioStartGate()
+
     @Volatile
     var currentClient: AirPlayClient? = null
 
@@ -2342,6 +2345,31 @@ object SessionController {
         sharedSecret: ByteArray?,
         host: String?,
     ): Boolean {
+        // SETUP 协商可持续数秒，期间 audioSender 尚未赋值：连接建立、动态补启、requestUI
+        // 重进和 changeModes 归还重试都可能在赋值前通过状态检查。没有闸门时会并发建立
+        // 多条流，后写入的 audioSender 覆盖先前的，另一条流仍启动却失去引用。
+        if (!audioStartGate.tryAcquire()) {
+            appendLog("AUDIO: 已有音频通道正在建立——跳过本次重复启动")
+            return false
+        }
+        return try {
+            startAudioChannelLocked(context, client, sharedSecret, host)
+        } finally {
+            audioStartGate.release()
+        }
+    }
+
+    /** [startAudioChannel] 的单飞临界区；进入前已持有 [audioStartGate]。 */
+    private fun startAudioChannelLocked(
+        context: Context,
+        client: AirPlayClient,
+        sharedSecret: ByteArray?,
+        host: String?,
+    ): Boolean {
+        if (audioSender?.isRunning == true) {
+            appendLog("AUDIO: 已有音频发送器在运行——跳过重复启动")
+            return false
+        }
         val connectionGeneration = client.connectionGeneration
         if (!client.isConnectionCurrent(connectionGeneration)) return false
         val diagnosticAttempt = ConnectionDiagnostics.timeline.snapshot()?.id
@@ -4376,3 +4404,21 @@ internal fun pairingFallback(
         )
     return PairingFallback(decision.useBtRetireHack, decision.usePlainSession)
 }
+
+/**
+ * 音频通道启动的 single-flight 闸门。
+ *
+ * 音频 SETUP 协商可持续数秒，期间 `audioSender` 尚未赋值；连接建立、动态补启、
+ * requestUI 重进和 changeModes 归还重试等多个入口若并发进入，会各自建立一条流，
+ * 后写入的 `audioSender` 覆盖先前的，另一条流仍启动却失去引用（双流 + 持续泄漏）。
+ */
+internal class AudioStartGate {
+    private val inFlight = AtomicBoolean(false)
+
+    /** 获得启动权返回 true；已有启动在进行中返回 false。 */
+    fun tryAcquire(): Boolean = inFlight.compareAndSet(false, true)
+
+    /** 释放启动权；必须放在 finally 里。 */
+    fun release() = inFlight.set(false)
+}
+

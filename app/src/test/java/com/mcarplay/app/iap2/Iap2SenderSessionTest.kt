@@ -203,6 +203,61 @@ class Iap2SenderSessionTest {
     }
 
     /**
+     * 2026-11-19 奔驰 MBUX（MB_E-P-4 / 480.7.4）实车回归：
+     *
+     * 车机在 StartHID 等待窗口内先发 0x4301，之后 34 秒才重发。旧实现把窗口内的
+     * 非 0x6800 帧直接丢掉，随后 8 秒窗口空等，误弹「车机尚未经蓝牙下发连接信息
+     * （0x4301）」并回退到网关地址，丢掉了车机自带热点配置里的 IPv6 端点。
+     *
+     * 断言：早到的 0x4301 必须被暂存并在后续阶段解析成完整端点，且不应再走
+     * 「8s 窗口内未到」的兜底。
+     */
+    @Test
+    fun startSessionArrivingDuringHidWaitIsDeferredAndConsumed() {
+        val pair = InMemoryStreamPair()
+        val phoneChannel = Iap2LinkChannel(pair.sideA, name = "phone-early-start")
+        val accessoryChannel = Iap2LinkChannel(pair.sideB, name = "accessory-early-start")
+        val accessory =
+            MockAccessory(
+                accessoryChannel,
+                shape = MockAccessory.Shape.BMW_ID9,
+                startSessionDuringHidWait = true,
+            )
+        val logs = java.util.Collections.synchronizedList(ArrayList<String>())
+        val accessoryThread = Thread({ accessory.run() }, "mock-accessory-early-start")
+        accessoryThread.isDaemon = true
+        accessoryThread.start()
+        try {
+            val startedAt = System.nanoTime()
+            val endpoint =
+                Iap2SenderSession(
+                    phoneChannel,
+                    log = { line ->
+                        logs += line
+                        println("PHONE $line")
+                    },
+                    bluetoothMac = "34:86:DA:86:BB:96",
+                    deviceName = "test-device",
+                ).run(timeoutMillis = 20_000L)
+            val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+
+            assertEquals("MockAP", endpoint.ssid)
+            assertEquals("secret-passphrase", endpoint.passphrase)
+            assertEquals(49152, endpoint.airPlayPort)
+            assertEquals(listOf("192.168.49.1", "fd00::1"), endpoint.ipAddresses)
+            assertTrue("早到 0x4301 不得触发 8s 空等（实际 ${elapsedMs}ms）", elapsedMs < 7_000L)
+            assertFalse(
+                "早到 0x4301 被丢弃了：$logs",
+                logs.any { it.contains("0x4301 在 8s 窗口内未到") },
+            )
+        } finally {
+            phoneChannel.close()
+            accessoryChannel.close()
+            accessoryThread.join(2_000)
+        }
+    }
+
+    /**
      * PR #19（凯迪拉克 CT5）：新协议车机声明会发 0x4301 但窗口内未到——
      * **不拆链**，返回空端点进入保活；保活泵把晚到的 0x4301 解析成完整端点
      * 经 onEndpointUpdate 回调（Audi MMI 9310 晚到 2 分 35 秒的同族形态）。
@@ -722,6 +777,11 @@ class Iap2SenderSessionTest {
         /** Phase 1 结束后再补发 0x4301（车机窗口晚开的真实时序）。 */
         private val lateStartSession: Boolean = false,
         /**
+         * 0x4301 在 StartHID 等待窗口内先到（奔驰 MBUX 2026-11-19 实车），
+         * 本轮不再重发。仅与 [Shape.BMW_ID9] 搭配使用。
+         */
+        private val startSessionDuringHidWait: Boolean = false,
+        /**
          * 地址字段按真实车机的定长填充（Audi MMI 3315 实测：IPv6 后跟 22 个 NUL、
          * IPv4 后跟 5 个）。用于锁定「必须去掉全部尾部 NUL」这一行为。
          */
@@ -773,7 +833,7 @@ class Iap2SenderSessionTest {
         }
 
         /** 老式奥迪/测试台：不声明接收清单，也不发 StartHID。 */
-        private val legacyHid: Boolean get() = shape != Shape.TEST_BENCH
+        private val legacyHid: Boolean get() = shape != Shape.TEST_BENCH && !startSessionDuringHidWait
 
         /** 是否应答 0x5702（旧协议在网络侧有凭据交换）。CT5 与 BMW 同为纯新协议。 */
         private val answersWifiRequest: Boolean get() = shape != Shape.BMW_ID9 && shape != Shape.CT5_NEW_PROTOCOL
@@ -829,6 +889,12 @@ class Iap2SenderSessionTest {
                     Iap2Csm.param(4, byteArrayOf(0x05, 0x0c)),
                 )
                 expect(Iap2MessageIds.DEVICE_HID_REPORT)
+                if (startSessionDuringHidWait) {
+                    check(shape == Shape.BMW_ID9) { "startSessionDuringHidWait 只用于 BMW_ID9" }
+                    // 先来一条订阅噪声，再发 0x4301——锁定「窗口内所有非 HID 帧都不得丢」。
+                    send(Iap2MessageIds.START_NOW_PLAYING_UPDATES)
+                    sendStartSession()
+                }
             }
 
             // WiFi 配置：BMW/CT5 形态不发 0x5702（AP 信息由 0x4301 自带）。
@@ -864,7 +930,7 @@ class Iap2SenderSessionTest {
 
             // CarPlay 启动
             expect(Iap2MessageIds.CARPLAY_AVAILABILITY)
-            if (providesStartSession && !lateStartSession) {
+            if (providesStartSession && !lateStartSession && !startSessionDuringHidWait) {
                 sendStartSession()
             }
 
@@ -931,7 +997,8 @@ class Iap2SenderSessionTest {
                     arrayOf(
                         Iap2Csm.u16List(
                             6,
-                            intArrayOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0x5200, 0x5203, 0xae00, 0xae02, 0x4157, 0x4301),
+                            intArrayOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0x5200, 0x5203, 0xae00, 0xae02, 0x4157, 0x4301) +
+                                if (startSessionDuringHidWait) intArrayOf(0x6800) else intArrayOf(),
                         ),
                         Iap2Csm.u16List(
                             7,
