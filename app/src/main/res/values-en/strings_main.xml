@@ -24,6 +24,12 @@
     <string name="main_hotspot_title">Car hotspot</string>
     <string name="main_hotspot_hint">Receiver hotspot SSID (sent in 0x5703)</string>
     <string name="main_hotspot_go">Connect</string>
+    <string name="main_internet_network_title">Prefer the car network</string>
+    <string name="main_internet_network_car_desc">On: the system may use the car hotspot for Internet access (needs Shizuku); if the car has no Internet, phone connectivity may suffer · applies to the next connection</string>
+    <string name="main_internet_network_phone_desc">Off: the car Wi-Fi is used for casting only and other apps keep the system default network (usually mobile data); if the system saved this hotspot, forget it in WLAN first · applies to the next connection</string>
+    <string name="main_internet_network_car_on">Switched to car network preference (applies to the next connection)</string>
+    <string name="main_internet_network_phone_on">Switched to phone data preference (applies to the next connection)</string>
+    <string name="main_internet_network_needs_shizuku">Car network preference needs Shizuku; without it the app falls back to phone data</string>
     <string name="cd_sound">Sound</string>
     <string name="main_audio_title">Sound on car</string>
     <string name="main_audio_desc_needs">Needs screen-capture permission · optional · the car is silent when off</string>

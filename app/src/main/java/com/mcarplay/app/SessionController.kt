@@ -67,6 +67,9 @@ import com.mcarplay.app.service.CarPlayService
 import com.mcarplay.app.service.ScreenLockMonitor
 import com.mcarplay.app.service.StreamingWifiLock
 import com.mcarplay.app.settings.DisplayPrefs
+import com.mcarplay.app.settings.InternetNetwork
+import com.mcarplay.app.settings.InternetNetworkPolicy
+import com.mcarplay.app.settings.InternetNetworkPrefs
 import com.mcarplay.app.settings.MediaPrefs
 import com.mcarplay.app.shizuku.CarInputClient
 import com.mcarplay.app.shizuku.Shell
@@ -1462,10 +1465,15 @@ object SessionController {
      */
     private fun autoJoinCarWifi(wifi: Iap2SenderSession.WifiConfiguration) {
         Bg.run("wifi-auto-join") {
+            val internetNetwork = preferredInternetNetwork()
             val shellReady =
                 appContext?.let { ShizukuGate.state(it) == ShizukuGate.State.READY } == true
+            appendLog(
+                "NETWORK: 互联网优先=${if (internetNetwork == InternetNetwork.CAR) "车机网络" else "手机流量"}" +
+                    "（${if (internetNetwork == InternetNetwork.CAR) "允许系统级使用车机热点" else "车机热点仅绑定本进程"}）",
+            )
             // 1) 首选静默路径：Shizuku 命令行连网（0 弹窗）
-            if (shellReady) {
+            if (InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
                 if (joinCarWifiSilently(wifi) is WifiCarPlayConnector.JoinResult.Joined) return@run
                 if (connectCancelled) return@run
                 // 热点已连上、只是 Network 通道没绑成：绝不能退回 specifier——那会重新
@@ -1482,12 +1490,26 @@ object SessionController {
             // 2) 回退：应用专属网络（不影响 4G/5G、不会保存为系统网络）
             if (shellReady && shellWifiDisabled() && !waitForWifiEnabled()) return@run
             if (connectCancelled) return@run
-            when (val result = joinCarWifiSpecifier(wifi)) {
+            if (internetNetwork == InternetNetwork.PHONE && shellReady) {
+                appendLog("NETWORK: 手机流量优先——跳过系统级存储与 connect-network 兜底")
+            }
+            val result =
+                joinCarWifiSpecifier(
+                    wifi,
+                    allowExistingSystemWifi = InternetNetworkPolicy.allowExistingSystemWifi(internetNetwork),
+                    allowSystemFallback = InternetNetworkPolicy.allowSystemFallback(internetNetwork),
+                )
+            when (result) {
                 is WifiCarPlayConnector.JoinResult.Joined -> Unit
 
                 WifiCarPlayConnector.JoinResult.Unsupported -> {
-                    appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
-                    legacyJoinCarWifi(wifi, shellReady)
+                    if (internetNetwork == InternetNetwork.CAR) {
+                        appendLog("WIFI: 热点安全类型 ${wifi.securityType} 无法用应用专属网络表达——退回系统级加入")
+                        legacyJoinCarWifi(wifi, shellReady)
+                    } else {
+                        appendLog("WIFI: 手机流量优先——该热点安全类型无法使用应用专属网络，请到 WLAN 手动加入")
+                        promptSpecifierFailed(wifi, shellReady)
+                    }
                 }
 
                 WifiCarPlayConnector.JoinResult.Unavailable -> promptSpecifierFailed(wifi, shellReady)
@@ -1495,21 +1517,27 @@ object SessionController {
         }
     }
 
-    /**
-     * 端点先于 0x5703 到达（或上一轮换网失败）时的入网入口：静默路径优先，
-     * 静默失败再退回应用专属网络。
-     */
+    /** 端点先于 0x5703 到达（或上一轮换网失败）时的入网入口，遵循「互联网网络」偏好。 */
     private fun joinCarWifi(
         wifi: Iap2SenderSession.WifiConfiguration,
         shellReady: Boolean,
     ): WifiCarPlayConnector.JoinResult {
-        if (!shellReady) return joinCarWifiSpecifier(wifi)
+        val internetNetwork = preferredInternetNetwork()
+        if (!InternetNetworkPolicy.useSystemWifi(internetNetwork, shellReady)) {
+            return joinCarWifiSpecifier(
+                wifi,
+                allowExistingSystemWifi = InternetNetworkPolicy.allowExistingSystemWifi(internetNetwork),
+                allowSystemFallback = InternetNetworkPolicy.allowSystemFallback(internetNetwork),
+            )
+        }
         val silent = joinCarWifiSilently(wifi)
         if (silent is WifiCarPlayConnector.JoinResult.Joined) return silent
         // 热点已连上但通道没绑成：不再走会弹窗的 specifier（见 autoJoinCarWifi 同款判断）
         if (!connectCancelled && shellWifiStatus().second == wifi.ssid) return silent
         return joinCarWifiSpecifier(wifi)
     }
+
+    private fun preferredInternetNetwork(): InternetNetwork = appContext?.let(InternetNetworkPrefs::get) ?: InternetNetworkPrefs.DEFAULT
 
     /**
      * 静默加入车机热点（**两步式，全程 0 弹窗**）。
@@ -1639,9 +1667,13 @@ object SessionController {
      * 也因此不再询问「清除系统里保存的同名热点」——静默路径本来就会把热点存进
      * 系统配置（这是设计，不是旧版本残留）。
      */
-    private fun joinCarWifiSpecifier(wifi: Iap2SenderSession.WifiConfiguration): WifiCarPlayConnector.JoinResult {
+    private fun joinCarWifiSpecifier(
+        wifi: Iap2SenderSession.WifiConfiguration,
+        allowExistingSystemWifi: Boolean = true,
+        allowSystemFallback: Boolean = true,
+    ): WifiCarPlayConnector.JoinResult {
         val connector = wifiConnector ?: return WifiCarPlayConnector.JoinResult.Unavailable
-        if (connector.isConnectedTo(wifi.ssid)) {
+        if (allowExistingSystemWifi && connector.isConnectedTo(wifi.ssid)) {
             appendLog("WIFI: 系统已连接同一局域网 \"${wifi.ssid}\"——直接绑定现有 Wi-Fi，跳过加入请求")
             val existing = bindExistingCarWifi(connector, wifi.ssid)
             if (existing != null) {
@@ -1670,8 +1702,8 @@ object SessionController {
                         securityType = wifi.securityType,
                         timeoutMillis = SPECIFIER_JOIN_TIMEOUT_MS,
                         isCancelled = { connectCancelled },
-                        quickFallback = { specifierQuickFallback(wifi) },
-                        deepFallback = { specifierDeepFallback(wifi) },
+                        quickFallback = if (allowSystemFallback) ({ specifierQuickFallback(wifi) }) else null,
+                        deepFallback = if (allowSystemFallback) ({ specifierDeepFallback(wifi) }) else null,
                         userChoicePending = { requestedAt ->
                             WifiCarPlayConnector.isUserChoicePending(uiPausedAtMs, uiStopped, requestedAt)
                         },
@@ -1684,7 +1716,7 @@ object SessionController {
             // 关键时机：bindProcessToNetwork 完成后再注册，车机才能看到 ctrl 广播
             ctrlAdvertiser?.ensureForNetwork(wifi.ssid, force = true, network = connector.currentNetwork)
             appendLog(">>> WiFi 已加入车机热点（应用专属网络），ctrl 广播已重新注册，等待车机 ctrl 邀请")
-        } else if (!connectCancelled) {
+        } else if (allowExistingSystemWifi && !connectCancelled) {
             appendLog("WIFI: 应用专属网络加入未成功（${result.javaClass.simpleName}）")
             // 兜底：系统里保存过该热点时，系统可能已自动全局连上它——specifier 挂起
             // 的形态下这条近路反而最稳（2026-10-22 真机：用户选「保留系统网络」+
@@ -1956,7 +1988,13 @@ object SessionController {
             true -> {
                 when (val retry = joinCarWifi(wifi, shellReady)) {
                     is WifiCarPlayConnector.JoinResult.Joined -> Unit
-                    WifiCarPlayConnector.JoinResult.Unsupported -> legacyJoinCarWifi(wifi, shellReady)
+                    WifiCarPlayConnector.JoinResult.Unsupported ->
+                        if (preferredInternetNetwork() == InternetNetwork.CAR) {
+                            legacyJoinCarWifi(wifi, shellReady)
+                        } else {
+                            appendLog("NETWORK: 手机流量优先——无法使用应用专属网络，转手动 WLAN 指引")
+                            manualJoinCarWifi(wifi)
+                        }
                     WifiCarPlayConnector.JoinResult.Unavailable -> {
                         phaseHint = t(R.string.sc_join_failed_manual)
                         appendLog("WIFI: 重试仍未加入 \"${wifi.ssid}\"——请到系统 WLAN 手动连接")
