@@ -575,7 +575,9 @@ class AudioSender(
                                 syncGate.onSuccess()?.let { log("AUDIO: 同步包发送已恢复（丢 $it 个）") }
                             } catch (error: IOException) {
                                 if (!syncGate.onFailure()) throw error
-                                if (syncGate.dropped == 1) log("AUDIO: 同步包发送失败，宽限期内重试 - ${error.message}")
+                                // 只在连续第二次失败时打一次：成功/失败交替时 dropped 会反复重置为 1，
+                                // 用 ==1 判定会在车机拒收 controlPort 时每轮刷一条（实测 2 秒一条）。
+                                if (syncGate.dropped == 2) log("AUDIO: 同步包发送失败，宽限期内重试 - ${error.message}")
                                 Thread.sleep(SYNC_INTERVAL_MILLIS)
                                 continue
                             }
@@ -716,7 +718,8 @@ class AudioSender(
             val keepGoing = sendGate.onFailure()
             if (!keepGoing) {
                 log("AUDIO: UDP 持续发送失败 ${sendGate.failingMillis()}ms（丢 ${sendGate.dropped} 包）- ${error.message}")
-            } else if (sendGate.dropped == 1) {
+            } else if (sendGate.dropped == 2) {
+                // 同同步包：只在连续第二次失败时打一次，避免交替成功/失败把日志刷爆。
                 log("AUDIO: UDP 发送失败，宽限期内丢包重试 - ${error.message}")
             }
             keepGoing

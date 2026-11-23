@@ -1211,7 +1211,8 @@ class AirPlayClient(
         var statusLine = "未请求"
         var body = ByteArray(0)
         try {
-            val first = requestInfo()
+            // 与同文件其它 /info 调用统一 5s：车机不回时不再白等 10s 才降级到兜底几何。
+            val first = requestInfo(5_000)
             statusLine = first.first
             body = first.second
             // 已缓存的方法只是候选；换固件后可回到 GET。检测只对明确不支持方法的响应试 POST。

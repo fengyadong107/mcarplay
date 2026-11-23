@@ -269,7 +269,7 @@ private fun unescapeRbsp(
     nal: ByteArray,
     limit: Int = nal.size,
 ): ByteArray {
-    val rbsp = ByteArrayOutputStream(nal.size)
+    val rbsp = ByteArrayOutputStream(minOf(nal.size, limit))
     var zeros = 0
     for (index in 1 until minOf(nal.size, limit)) {
         val value = nal[index].toInt() and 0xFF

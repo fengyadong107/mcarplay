@@ -324,7 +324,6 @@ object SessionController {
         Bg.run("auto-play-start") {
             try {
                 val readyDeadline = SystemClock.uptimeMillis() + AUTO_PLAY_READY_TIMEOUT_MS
-                Thread.sleep(2_000L)
                 if (currentCarLifeSession !== session) return@run
                 // 硬按键在 VIDEO_RUNNING 之前会被 CarWith 静默拒绝；冷启动可能远慢于 2s。
                 if (!awaitVideoRunning(session, readyDeadline)) {

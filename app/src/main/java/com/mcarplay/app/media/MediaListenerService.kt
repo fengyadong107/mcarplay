@@ -50,6 +50,8 @@ class MediaListenerService : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        // 断开后兜底轮询必须停：否则每次重绑都会再叠加一条 1s 链，空转到进程结束。
+        mainHandler.removeCallbacks(periodicRefresh)
         MediaSessionsState.accessGranted = false
         NotificationAccess.markDisconnected()
         CarWithNotificationProbe.onListenerDisconnected()

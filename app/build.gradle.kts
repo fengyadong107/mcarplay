@@ -122,6 +122,9 @@ android {
         versionName = effectiveVersionName
         buildConfigField("String", "BASE_VERSION", "\"$appVersionName\"")
         buildConfigField("String", "RELEASE_TAG", "\"$releaseTag\"")
+        // 应用自身只有中文（默认）与英文；其余 70 多种语言全是 AppCompat 自带文案。
+        // 显式列中文三地而不是 "zh"：AGP 8.7 实测只写 "zh" 会把 zh-rCN 一起裁掉。
+        resourceConfigurations += listOf("zh-rCN", "zh-rHK", "zh-rTW", "en")
     }
 
     signingConfigs {
