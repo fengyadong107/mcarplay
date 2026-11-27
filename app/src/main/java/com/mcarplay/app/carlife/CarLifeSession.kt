@@ -79,6 +79,14 @@ class CarLifeSession(
     @Volatile
     private var compatibleEntryRequested = false
 
+    /** 最近一次入口请求的本机时刻（uptimeMillis）；前台重试的冷却判断用。 */
+    @Volatile
+    private var lastEntryRequestAtMs = 0L
+
+    /** 「回前台补请求」已进行的次数（首次请求不计）。 */
+    @Volatile
+    private var entryRetryCount = 0
+
     @Volatile
     private var lastChannelSummary = "not_started"
 
@@ -124,6 +132,9 @@ class CarLifeSession(
         private set
 
     private val stats = CarLifeVideoStats()
+
+    /** 视频包尺寸统计的下一次打点时刻（用于判断 CarWith 是否把一帧拆成很多小包）。 */
+    private var nextParserStatsAtMs = 0L
 
     val isRunning: Boolean get() = running.get()
 
@@ -271,8 +282,12 @@ class CarLifeSession(
                 connectCarLifeSocket(host, port, CONNECT_TIMEOUT_MS)
             }
         activeConnector.onAttemptFailed = { attempt, _ ->
-            if (launchStrategy == CarLifeLaunchStrategy.COMPATIBLE && attempt == 1) {
-                requestCompatibleEntry()
+            if (launchStrategy == CarLifeLaunchStrategy.COMPATIBLE) {
+                if (attempt == 1) {
+                    requestCompatibleEntry()
+                } else {
+                    requestCompatibleEntryAfterForegroundRetry()
+                }
             }
         }
         connector = activeConnector
@@ -315,6 +330,17 @@ class CarLifeSession(
     }
 
     /**
+     * 重试入口：重置一次性闸门后走同一条请求路径（入口被系统静默拦截后的补救）。
+     */
+    private fun requestCompatibleEntryForRetry() {
+        synchronized(entryRequestLock) {
+            if (!running.get()) return
+            compatibleEntryRequested = false
+        }
+        requestCompatibleEntry()
+    }
+
+    /**
      * 第一次连接失败才请求入口。旧版没有公开入口时依次尝试 root 服务和设置页；
      * 不打开百度 CarLife 首页，因为它只启动七口，不能创建 CarWith 编码器。
      */
@@ -322,6 +348,7 @@ class CarLifeSession(
         synchronized(entryRequestLock) {
             if (compatibleEntryRequested || !running.get()) return
             compatibleEntryRequested = true
+            lastEntryRequestAtMs = SystemClock.uptimeMillis()
         }
         entryLaunchedInBackground = !isAppInForeground()
         val carWithEntry = requestPublicEntry()
@@ -374,6 +401,23 @@ class CarLifeSession(
         if (entryLaunchedInBackground && plan.route != EntryRoute.LEGACY_ROOT_SERVICE) {
             log("CARLIFE: 本应用当前不在前台，系统可能拦截 CarWith 入口（小米需允许「后台弹出界面」）")
         }
+    }
+
+    /**
+     * 入口请求发出时应用在后台、随后被系统静默拦截的补救：等待窗口内一旦应用回到前台，
+     * 冷却过后允许再请求一次（最多 [ENTRY_RETRY_LIMIT] 次）。
+     *
+     * 2026-11-25 22:10 实测：后台发起入口后 7240 端口 61 次 REFUSED，用户 22:10:27 解锁手机后
+     * App 从不补请求，一直耗到 25 秒超时（CARWITH_ENTRY_BLOCKED），两轮合计 108 秒零视频。
+     */
+    private fun requestCompatibleEntryAfterForegroundRetry() {
+        if (!compatibleEntryRequested || !entryLaunchedInBackground) return
+        if (entryRetryCount >= ENTRY_RETRY_LIMIT) return
+        if (!isAppInForeground()) return
+        if (SystemClock.uptimeMillis() - lastEntryRequestAtMs < ENTRY_RETRY_COOLDOWN_MS) return
+        entryRetryCount++
+        log("CARLIFE: 应用已回前台，重试打开 CarWith 入口（第 $entryRetryCount 次）")
+        requestCompatibleEntryForRetry()
     }
 
     /**
@@ -476,7 +520,15 @@ class CarLifeSession(
             } else {
                 frame.payload
             }
-        videoParser.push(frame.timestamp.toLong() and 0xFFFF_FFFFL, payload).forEach { accessUnit ->
+        val accessUnits =
+            videoParser.push(frame.timestamp.toLong() and 0xFFFF_FFFFL, payload)
+        val now = SystemClock.uptimeMillis()
+        if (now >= nextParserStatsAtMs) {
+            nextParserStatsAtMs = now + VIDEO_PACKET_STATS_INTERVAL_MS
+            val packetStats = videoParser.takeStats()
+            if (packetStats.packets > 0L) log("CARLIFE: 视频包统计 ${packetStats.describe()}")
+        }
+        accessUnits.forEach { accessUnit ->
             stats.record(accessUnit)
             accessUnit.dimensions()?.let { (width, height) ->
                 videoWidth = width
@@ -637,8 +689,11 @@ class CarLifeSession(
             val payload =
                 if (command.serviceType == CarLifeProtocol.TOUCH_ACTION) {
                     CarLifeProtocol.touchActionPayload(
-                        command.action, command.x, command.y,
-                        command.pointerX, command.pointerY,
+                        command.action,
+                        command.x,
+                        command.y,
+                        command.pointerX,
+                        command.pointerY,
                     )
                 } else {
                     CarLifeProtocol.touchPayload(command.x, command.y)
@@ -758,6 +813,15 @@ class CarLifeSession(
 
         const val UNPARSED_AUDIO_LOG_EVERY = 2_000L
 
+        /** 视频包尺寸统计的打点间隔。 */
+        const val VIDEO_PACKET_STATS_INTERVAL_MS = 30_000L
+
+        /** 入口被系统拦截后，「回前台补请求」的最大次数。 */
+        const val ENTRY_RETRY_LIMIT = 3
+
+        /** 两次入口请求之间的最小冷却（覆盖 25 s 等待窗口内最多 3 次重试）。 */
+        const val ENTRY_RETRY_COOLDOWN_MS = 5_000L
+
         data class EntryPlan(
             val result: CarLifeLauncher.EntryLaunchResult,
             val route: EntryRoute,
@@ -809,7 +873,8 @@ class CarLifeSession(
         const val ENTRY_NOT_OBSERVED_HINT = "七路未就绪，且通知使用权开启时未观察到 CarWith 通知"
         const val ENTRY_STATUS_UNKNOWN_HINT = "七路未就绪；通知使用权不足，无法判断 CarWith 入口是否执行"
         const val LISTENERS_PENDING_HINT = "已观察到 CarWith 通知，但七路端口未就绪"
-        const val PROTOCOL_SILENT_HINT = "七路已连接，但未收到 CarLife 协议响应"
+        const val PROTOCOL_SILENT_HINT =
+            "七路已连接，但未收到 CarLife 协议响应（CarWith 可能残留异常会话，请在最近任务划掉 CarWith 后重连）"
 
         const val CONNECT_TIMEOUT_MS = 800
         const val LISTENER_WAIT_MS = 25_000L

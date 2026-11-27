@@ -8,7 +8,7 @@ import org.junit.Test
 /**
  * 透传队列的容量与溢出语义。
  *
- * 容量 8 是延迟上界（30 fps ≈ 267 ms）的来源；溢出行为决定恢复点：
+ * 容量 16 是延迟上界（30 fps ≈ 533 ms）的来源；溢出行为决定恢复点：
  * 普通帧丢弃、关键帧替换旧帧，绝不能把更早的旧关键帧留在队首冒充新恢复边界。
  * 丢帧后的断流标记必须与后续帧一起入队、随帧取出——否则消费方可能先拿到新 IDR、
  * 再被迟到的标记逼着多等一个 IDR（2026-11-16 审查）。
@@ -22,7 +22,7 @@ class PassthroughFrameQueueTest {
 
     @Test
     fun defaultCapacityBoundsTheBacklog() {
-        assertEquals(8, PassthroughFrameQueue.DEFAULT_CAPACITY)
+        assertEquals(16, PassthroughFrameQueue.DEFAULT_CAPACITY)
         val queue = PassthroughFrameQueue()
         repeat(
             PassthroughFrameQueue.DEFAULT_CAPACITY,

@@ -28,6 +28,14 @@ class CarLifeAudioBridge(
     var lastMediaPcmAtMs: Long = 0L
         private set
 
+    /**
+     * 最近一次收到 MEDIA 通道 INIT 的时刻（uptimeMillis）；0 = 本次会话尚未初始化。
+     * 媒体开始硬按键在 INIT 之前会被 CarWith 静默拒绝（2026-11-27 07:43 实测），自动起播据此等待。
+     */
+    @Volatile
+    var mediaInitAtMs: Long = 0L
+        private set
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         sender.startExternalSource()
@@ -93,6 +101,9 @@ class CarLifeAudioBridge(
         applyPendingDuckDb()
         if (event !is CarLifeAudioEvent.Pcm) {
             converters.remove(channel)
+            if (channel == CarLifeChannel.MEDIA && event is CarLifeAudioEvent.Init) {
+                mediaInitAtMs = android.os.SystemClock.uptimeMillis()
+            }
             if (event is CarLifeAudioEvent.Stop && channel == CarLifeChannel.MEDIA) mixer.mediaStopped()
             flushPrompts()
             return

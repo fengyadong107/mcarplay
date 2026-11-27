@@ -226,7 +226,7 @@ class VideoSender(
     private val encoderReprimePending = AtomicBoolean(false)
 
     /**
-     * 透传队列（容量 8，见 [PassthroughFrameQueue]）。入队方是 CarLife 读线程，出队方是推流线程；
+     * 透传队列（容量 16，见 [PassthroughFrameQueue]）。入队方是 CarLife 读线程，出队方是推流线程；
      * 本字段只做内存排队，不做任何阻塞式网络调用。
      *
      * 丢帧后的「解码链已断」标记随帧入队（[PassthroughFrameQueue.Entry.discontinuityBefore]），
@@ -583,7 +583,11 @@ class VideoSender(
                             continue
                         }
                     if (count < 0) {
-                        if (socket === client) log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                        if (socket === client) {
+                            log("VIDEO: 车机关闭了屏幕数据口（EOF，此前回传 ${inboundBytes.get()}B，已发 $framesSent 帧）")
+                            // 关闭本端 socket 唤醒可能阻塞在写/轮询上的发送线程，避免空等
+                            if (!quiescing.get()) client.close()
+                        }
                         return@Thread
                     }
                     val total = inboundBytes.addAndGet(count.toLong())
@@ -995,7 +999,7 @@ class VideoSender(
      * Returns false when the bounded queue is full; callers should drop the
      * packet rather than block CarLife's video reader.
      *
-     * 容量 8（[PassthroughFrameQueue]）。队满时：
+     * 容量 16（[PassthroughFrameQueue]）。队满时：
      *  - 普通帧丢弃并返回 false（调用方重置入流门控等下一个 IDR），并额外派发一次补要关键帧；
      *  - 关键帧替换已排队的旧帧后仍然入队（返回 true），因为它是唯一可用的恢复边界——
      *    不能让它被丢弃，也不能把更早的旧关键帧当成恢复点；此时恢复点已到，不再补要。
@@ -1127,9 +1131,10 @@ class VideoSender(
     }
 
     private fun drainExternalVideo() {
-        val output = socket?.getOutputStream() ?: return
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val entry = externalQueue.poll(250)
                 // 转码中：帧改喂解码器，数据口（含 keepAlive）由编码线程独占
                 val pipeline = transcoder
@@ -1311,10 +1316,11 @@ class VideoSender(
 
     private fun drainEncoder() {
         val codec = encoder ?: return
-        val output = socket?.getOutputStream() ?: return
         val bufferInfo = MediaCodec.BufferInfo()
         try {
-            while (running.get()) {
+            val client = socket ?: return
+            val output = client.getOutputStream()
+            while (running.get() && !client.isClosed) {
                 val index =
                     try {
                         codec.dequeueOutputBuffer(bufferInfo, 10_000)

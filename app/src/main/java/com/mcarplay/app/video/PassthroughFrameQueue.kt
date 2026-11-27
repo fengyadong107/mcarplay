@@ -4,11 +4,16 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * 透传帧的有界队列（容量 [DEFAULT_CAPACITY] = 8）。
+ * 透传帧的有界队列（容量 [DEFAULT_CAPACITY] = 16）。
  *
- * 为什么是 8：64 帧在 30 fps 下允许约 2.1 s 积压。车机或链路变慢时旧实现不丢帧，而是越排越长，
- * 表现为「延迟越来越大」——比丢帧更难排查、体感也更差。8 帧给出可计算的上界：30 fps ≈ 267 ms，
- * 60 fps ≈ 133 ms。超过上界就丢帧并重新等 IDR，延迟不再累积。
+ * 为什么是 16：车机或链路变慢时旧实现不丢帧，而是越排越长，表现为「延迟越来越大」——
+ * 比丢帧更难排查、体感也更差。队列给出可计算的上界：30 fps ≈ 533 ms，60 fps ≈ 267 ms。
+ * 超过上界就丢帧并重新等 IDR，延迟不再累积。
+ *
+ * 2026-11-25 真机日志：CarWith 实际 55-60 fps，旧容量 8 只有 133-145 ms 上界，而透传写阻塞
+ * 实测 188/469/648/774 ms——每一次超过上界的写阻塞都会触发「队满 → 丢整 GOP → 等下一个
+ * IDR（120 帧 ≈ 2 s）」，把 20-188 ms 的瞬时抖动放大成 2-3 秒画面冻结（22:00 会话 10 次）。
+ * 16 帧把容错窗提高到约 267 ms，同时仍远小于一个 IDR 周期，恢复代价可控。
  *
  * 两种溢出结果：
  *  - 普通帧：入队失败，[Outcome.DROPPED_FULL]。调用方（`SessionController`）会重置入流门控、
@@ -119,7 +124,7 @@ internal class PassthroughFrameQueue(
         }
 
     companion object {
-        /** 约 267 ms @30 fps / 133 ms @60 fps 的积压上界。 */
-        const val DEFAULT_CAPACITY = 8
+        /** 约 533 ms @30 fps / 267 ms @60 fps 的积压上界。 */
+        const val DEFAULT_CAPACITY = 16
     }
 }

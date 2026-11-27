@@ -23,12 +23,12 @@ import com.mcarplay.app.bt.TargetDevicePrefs
 import com.mcarplay.app.carlife.CarLifeAudioEvent
 import com.mcarplay.app.carlife.CarLifeJoinGate
 import com.mcarplay.app.carlife.CarLifeLaunchStrategy
-import com.mcarplay.app.carlife.CarWithSessionFlag
 import com.mcarplay.app.carlife.CarLifeLauncher
 import com.mcarplay.app.carlife.CarLifeMultiTouchState
 import com.mcarplay.app.carlife.CarLifeProtocol
 import com.mcarplay.app.carlife.CarLifeSession
 import com.mcarplay.app.carlife.CarLifeSessionRegistry
+import com.mcarplay.app.carlife.CarWithSessionFlag
 import com.mcarplay.app.carlife.mapCarLifeTouch
 import com.mcarplay.app.compat.CompatibilityPrefs
 import com.mcarplay.app.compat.PassatReturnPolicy
@@ -208,6 +208,7 @@ object SessionController {
         appContext = app
         ReceiverDetectionRuntime.initialize(app)
         VehiclePresetRuntime.load(app)
+        CompatibilityPrefs.loadRuntime(app)
         ReceiverDetectionRuntime.onBudgetExpired = { epoch ->
             Bg.run("detection-budget") {
                 synchronized(this) {
@@ -272,6 +273,15 @@ object SessionController {
 
     /** 主动起播等 CarWith 视频就绪的上限；冷启动可能远慢于 2s。 */
     private const val AUTO_PLAY_READY_TIMEOUT_MS = 25_000L
+
+    /** 主动起播最多重发几次媒体开始键（CarWith 冷启动 MEDIA 通道可达 17 s）。 */
+    private const val AUTO_PLAY_MEDIA_KEY_ATTEMPTS = 3
+
+    /** 每次媒体开始键发出后等待 PCM 的时长。 */
+    private const val AUTO_PLAY_MEDIA_PCM_WAIT_MS = 5_000L
+
+    /** 等待 CarWith MEDIA 通道 INIT 的上限：硬按键在此前会被静默拒绝（实测 37 s 才 INIT）。 */
+    private const val AUTO_PLAY_MEDIA_READY_TIMEOUT_MS = 60_000L
 
     /**
      * 「上车自动播放音乐」关闭时，在 CarWith 连接后的一小段窗口内抑制自动播放：
@@ -348,9 +358,26 @@ object SessionController {
                     appendLog("AUTO-PLAY: CarWith 媒体已在播放，跳过")
                     return@run
                 }
-                if (session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) {
-                    appendLog("AUTO-PLAY: 已发送 CarWith 媒体开始键，等待媒体 PCM")
-                    if (awaitMediaPcm(session, bridge, 6_000L)) {
+                // 媒体开始键在 MEDIA 通道 INIT 之前会被 CarWith 静默拒绝（2026-11-27 07:43 实测：
+                // 视频就绪后 37 s 才 INIT，此前的媒体键全部无效）。改成等 INIT 再发键。
+                if (!awaitMediaChannelReady(session, bridge, AUTO_PLAY_MEDIA_READY_TIMEOUT_MS)) {
+                    appendLog("AUTO-PLAY: CarWith MEDIA 通道 ${AUTO_PLAY_MEDIA_READY_TIMEOUT_MS / 1000}s 内未就绪，跳过自动起播")
+                    return@run
+                }
+                // 冷启动时 CarWith 的 MEDIA 通道要 17 s 才出 PCM（2026-11-25 22:00 实测），
+                // 单次 6 s 等待必然失败且不再重试——改为每 5 s 重发一次媒体开始键、最多 3 次。
+                for (attempt in 1..AUTO_PLAY_MEDIA_KEY_ATTEMPTS) {
+                    if (currentCarLifeSession !== session) return@run
+                    if (bridge.lastMediaPcmAtMs > 0L) break
+                    if (!session.sendHardKey(CarLifeProtocol.HARD_KEY_MEDIA_START)) break
+                    appendLog(
+                        if (attempt == 1) {
+                            "AUTO-PLAY: 已发送 CarWith 媒体开始键，等待媒体 PCM"
+                        } else {
+                            "AUTO-PLAY: 媒体 PCM 未出现，重发媒体开始键（第 $attempt 次）"
+                        },
+                    )
+                    if (awaitMediaPcm(session, bridge, AUTO_PLAY_MEDIA_PCM_WAIT_MS)) {
                         appendLog("AUTO-PLAY: CarWith 媒体已起播（媒体开始键）")
                         return@run
                     }
@@ -360,6 +387,21 @@ object SessionController {
                 Thread.currentThread().interrupt()
             }
         }
+    }
+
+    /** 等待 CarWith MEDIA 通道 INIT（或媒体已在播放）；true = 可以发媒体开始键。 */
+    private fun awaitMediaChannelReady(
+        session: CarLifeSession,
+        bridge: CarLifeAudioBridge,
+        timeoutMs: Long,
+    ): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (currentCarLifeSession !== session) return false
+            if (bridge.mediaInitAtMs > 0L || bridge.lastMediaPcmAtMs > 0L) return true
+            Thread.sleep(500L)
+        }
+        return currentCarLifeSession === session && (bridge.mediaInitAtMs > 0L || bridge.lastMediaPcmAtMs > 0L)
     }
 
     /** 等待 CarWith 媒体 PCM 出现；true = 已开始播放。 */
@@ -539,6 +581,15 @@ object SessionController {
     @Volatile
     private var disconnectCompletion: java.util.concurrent.CountDownLatch? = null
     private var userStopGeneration = 0L
+
+    /**
+     * 正在启动或排队等待的 startConnection 调用数（含 disconnect 后的延时重入）。
+     * disconnect 收尾时若 >0，说明新一轮连接已启动，不能停掉它刚拉起的前台保活服务
+     * （2026-11-25 22:09：旧会话收尾把新会话的服务与唤醒锁一起停掉，新会话 69 秒无保护）。
+     */
+    private val pendingConnects =
+        java.util.concurrent.atomic
+            .AtomicInteger(0)
 
     internal fun isDisconnecting(): Boolean = disconnectCompletion != null
 
@@ -874,6 +925,18 @@ object SessionController {
         )
     }
 
+    /**
+     * ACL 掉线是否只是蓝牙握手期的抖动：客户端仍在「等车机回连」窗口内时，
+     * CarPlayService 不应把这次掉线当成下车，保留客户端与监听（2026-11-21 上游）。
+     */
+    fun keepBluetoothRetryAfterAclLoss(address: String?): Boolean {
+        if (connectCancelled) return false
+        val attempt = ConnectionDiagnostics.timeline.snapshot() ?: return false
+        if (attempt.stage != ConnectionStage.BLUETOOTH) return false
+        val client = bluetoothClient ?: return false
+        return client.canRetryAfterAclLoss(address)
+    }
+
     private fun stopFormalCarLife() {
         appContext?.let(CarWithSessionFlag::clear)
         carLifeOutput = null
@@ -922,6 +985,10 @@ object SessionController {
                 onAccessUnit = onAccessUnit@{ unit ->
                     if (currentCarLifeSession !== session) return@onAccessUnit
                     val output = carLifeOutput ?: return@onAccessUnit
+                    // 计数必须在入流门控之前：报告头的 sourceVideoFrames 声明为 CarWith 输入端
+                    // 帧数。放在 admit 之后会把「等 IDR 期间被门控丢弃的帧」漏掉
+                    // （2026-11-25 22:00 会话：timeline 记 965 帧，实际输入约 1900 帧）。
+                    ConnectionDiagnostics.timeline.sourceFrame(output.attempt)
                     val joinsBefore = output.gate.joins
                     val frame = output.gate.admit(unit) ?: return@onAccessUnit
                     if (output.gate.joins != joinsBefore) {
@@ -930,7 +997,6 @@ object SessionController {
                                 "补参数集=${output.gate.filledAtLastJoin.ifEmpty { "无（帧内已带齐）" }}）",
                         )
                     }
-                    ConnectionDiagnostics.timeline.sourceFrame(output.attempt)
                     val sender = output.sender
                     val dimensions = frame.dimensions()
                     if (dimensions != null && sender.isNewSourceSize(dimensions.first, dimensions.second)) {
@@ -999,6 +1065,19 @@ object SessionController {
      */
     @Synchronized
     fun startConnection(
+        context: Context,
+        automatic: Boolean = false,
+    ) {
+        pendingConnects.incrementAndGet()
+        try {
+            startConnectionInner(context, automatic)
+        } finally {
+            pendingConnects.decrementAndGet()
+        }
+    }
+
+    @Synchronized
+    private fun startConnectionInner(
         context: Context,
         automatic: Boolean = false,
     ) {
@@ -1135,8 +1214,12 @@ object SessionController {
             // 配对中绝不能断——DiPlay 在隧道 iAP2 就绪前看到 RFCOMM 断开即判
             // bring-up failed 并拆整轮无线栈（含推流中的 AirPlay 会话，2026-10-16 实测）。
             phaseHint = null
-            CarPlayService
-                .stop(context)
+            if (pendingConnects.get() == 0) {
+                CarPlayService
+                    .stop(context)
+            } else {
+                appendLog("SESSION: 新一轮连接已排队——保留前台保活服务")
+            }
             boundCarSsid = null
             // shell 兜底存下的系统网络（connect-network）自动 forget 还原：无互联网热点
             // 被系统当默认网会挤掉移动数据。失败只记日志（用户可到 WLAN 手动删）。
@@ -2250,7 +2333,8 @@ object SessionController {
         appContext?.let { ctx ->
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 runCatching {
-                    com.mcarplay.app.util.copySensitiveText(ctx, "carplay-wifi", passphrase)
+                    com.mcarplay.app.util
+                        .copySensitiveText(ctx, "carplay-wifi", passphrase)
                     uiHintSink?.invoke(t(R.string.sc_psk_copied, passphrase.length))
                 }
             }
@@ -4458,4 +4542,3 @@ internal class AudioStartGate {
     /** 释放启动权；必须放在 finally 里。 */
     fun release() = inFlight.set(false)
 }
-

@@ -91,6 +91,10 @@ class CarPlayService : Service() {
                         fileLog("AUTO: 车机蓝牙 ${ACL_FLAP_GUARD_MS}ms 内已重连——忽略本次「下车自动结束」")
                         return@run
                     }
+                    if (SessionController.keepBluetoothRetryAfterAclLoss(flapAddress)) {
+                        fileLog("SVC: ACL 断开但蓝牙握手仍在「等车机回连」窗口内——保留客户端与监听")
+                        return@run
+                    }
                     endSessionForParkedCar()
                 }
                 // 还没决定结束，先保持粘性
@@ -283,6 +287,12 @@ class CarPlayService : Service() {
         /** 上车自动连接：车机蓝牙 ACL 连上时由 CarBluetoothReceiver 投递。 */
         const val ACTION_AUTO_START_SESSION = "com.mcarplay.app.action.AUTO_START"
 
+        /**
+         * 连接流程显式拉起保活服务。必须带非 null action：无 action 的 startForegroundService
+         * 会命中 onStartCommand 的「系统空启动」自停分支（见下方 start）。
+         */
+        const val ACTION_ENSURE_FOREGROUND = "com.mcarplay.app.action.ENSURE_FOREGROUND"
+
         /** 目标蓝牙 ACL 断开时检查是否自动收摊；Wi-Fi 视频已启动时保留会话。 */
         const val ACTION_AUTO_STOP_SESSION = "com.mcarplay.app.action.AUTO_STOP"
 
@@ -308,8 +318,16 @@ class CarPlayService : Service() {
         @Volatile
         var pendingProjectionResult: Pair<Int, Intent>? = null
 
+        /**
+         * 显式 action 启动：无 action 的 startForegroundService 会在会话对象尚未建好时
+         * 命中 onStartCommand 的「系统空启动（无会话）——直接停服务」分支，把
+         * ACTION_AUTO_START 刚拿到的前台与 PARTIAL_WAKE_LOCK 一起收掉，进程被系统冻结
+         * （2026-11-25 22:00 会话：startForeground 后 40ms 自停，随后 8 分钟无唤醒锁）。
+         */
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, CarPlayService::class.java))
+            context.startForegroundService(
+                Intent(context, CarPlayService::class.java).setAction(ACTION_ENSURE_FOREGROUND),
+            )
         }
 
         fun stop(context: Context) {

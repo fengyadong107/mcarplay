@@ -564,6 +564,8 @@ class AudioSender(
                 {
                     var syncSequence = 0
                     var first = true
+                    var syncFailures = 0L
+                    var syncRecoveries = 0L
                     try {
                         while (running.get() && !client.isClosed) {
                             val next = timestamp
@@ -572,12 +574,21 @@ class AudioSender(
                             val packet = AudioSyncPacket.build(syncSequence, current, next, ntp, first)
                             try {
                                 client.send(DatagramPacket(packet, packet.size))
-                                syncGate.onSuccess()?.let { log("AUDIO: 同步包发送已恢复（丢 $it 个）") }
+                                syncGate.onSuccess()?.let {
+                                    syncRecoveries++
+                                    if (syncRecoveries <= 3L || syncRecoveries % 30L == 0L) {
+                                        log("AUDIO: 同步包发送已恢复（丢 $it 个），累计恢复 $syncRecoveries 次")
+                                    }
+                                }
                             } catch (error: IOException) {
                                 if (!syncGate.onFailure()) throw error
-                                // 只在连续第二次失败时打一次：成功/失败交替时 dropped 会反复重置为 1，
-                                // 用 ==1 判定会在车机拒收 controlPort 时每轮刷一条（实测 2 秒一条）。
-                                if (syncGate.dropped == 2) log("AUDIO: 同步包发送失败，宽限期内重试 - ${error.message}")
+                                // 成功/失败交替时 dropped 反复重置为 1，按 dropped 判定会让失败原因
+                                // 永远打不出来（2026-11-25 报告 480 条「已恢复（丢 1 个）」无一含异常类型）。
+                                // 改用总失败次数限频：前 3 次与之后每 100 次各打一条。
+                                syncFailures++
+                                if (syncFailures <= 3L || syncFailures % 100L == 0L) {
+                                    log("AUDIO: 同步包发送失败（累计 $syncFailures 次，连续 ${syncGate.dropped} 个）- ${error.message}")
+                                }
                                 Thread.sleep(SYNC_INTERVAL_MILLIS)
                                 continue
                             }

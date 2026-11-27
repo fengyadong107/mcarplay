@@ -297,7 +297,7 @@ class VideoOutputHealthTest {
 
     @Test
     fun thresholdsAreOrdered() {
-        assertEquals(5_000L, VideoOutputHealth.WARN_MILLIS)
+        assertEquals(1_500L, VideoOutputHealth.WARN_MILLIS)
         assertEquals(20_000L, VideoOutputHealth.GIVE_UP_MILLIS)
         assertEquals(3, VideoOutputHealth.MAX_KEY_FRAME_REQUESTS)
     }

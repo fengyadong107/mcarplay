@@ -389,6 +389,16 @@ class Iap2BluetoothClient(
 
     val isRunning: Boolean get() = running
 
+    /**
+     * ACL 掉线时本次蓝牙握手是否仍应保持：出站快速失败后进入「等车机回连」窗口时，
+     * ACL 抖动是预期现象，车机会稍后重连，不应把客户端拆掉（2026-11-21 上游）。
+     */
+    fun canRetryAfterAclLoss(address: String?): Boolean {
+        if (!running) return false
+        val addr = address ?: return false
+        return inboundWait.isWaiting(addr)
+    }
+
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
             PackageManager.PERMISSION_GRANTED
@@ -580,7 +590,10 @@ class Iap2BluetoothClient(
                     }
                 }
                 // 出站 RFCOMM 尝试本身可能拉起又拆掉 ACL：同样标记为自己引起（connect() 可阻塞数十秒）
-                val socket = selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) }
+                val socket =
+                    BtSessionGate.dial(
+                        device.address,
+                    ) { selfLinkChange { tryConnect(device, name, myGeneration, diagnosticEpoch) } }
                 if (socket != null) {
                     log("BT-C: ✓ 已连入 $name 的无线 iAP2 服务（RFCOMM 建立）")
                     Iap2ReceiverMemory.remember(context, device.address)
@@ -832,4 +845,28 @@ object BtSessionGate {
      */
     @Volatile
     var sessionActive: Boolean = false
+
+    /** 正在出站拨号的车机地址：同一地址的回连直接拒收（换车机照收），避免两条 RFCOMM 互踩。 */
+    @Volatile
+    private var dialingAddress: String? = null
+
+    /** 同一车机已在拨号时返回 false，调用方应拒收这条回连（2026-11-23 上游）。 */
+    fun admitInbound(address: String?): Boolean {
+        val dialing = dialingAddress ?: return true
+        return !dialing.equals(address, ignoreCase = true)
+    }
+
+    /** 包住一次出站拨号；拨号期间 [admitInbound] 对同一地址返回 false。 */
+    fun <T> dial(
+        address: String,
+        connect: () -> T?,
+    ): T? {
+        if (inboundActive || sessionActive) return null
+        dialingAddress = address
+        try {
+            return connect()
+        } finally {
+            dialingAddress = null
+        }
+    }
 }

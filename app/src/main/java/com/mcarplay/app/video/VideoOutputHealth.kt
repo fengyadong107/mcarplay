@@ -15,8 +15,8 @@ package com.mcarplay.app.video
  *  - 主屏暂停/会话关闭 → 完全不判定，重置基线；暂停期间不得补帧。
  *
  * 阈值刻意不照抄参考实现的单一 20 s：那款发送端的日志里出现过 14 s 的写阻塞而看门狗全程未触发，
- * 说明单一「距上次成功写」阈值覆盖不到写阻塞。这里报警 5 s（与
- * [com.mcarplay.app.diagnostics.ConnectionTimeline] 的 5 s 文案对齐）、判「自动补救用尽」20 s
+ * 说明单一「距上次成功写」阈值覆盖不到写阻塞。这里报警 1.5 s（真机实测冻结多为 2-4.9 s，
+ * 旧值 5 s 全程盲区）、判「自动补救用尽」20 s
  * （与 [com.mcarplay.app.net.TcpLiveness] 的约 19 s 对齐），中间每 5 s 补一次关键帧、最多 3 轮。
  *
  * 本类**不做**任何丢弃、拆链或关闭动作：[Action.GIVE_UP] 只是停止自动补救并留一行日志，
@@ -205,8 +205,12 @@ internal class VideoOutputHealth(
     private fun Kind.worthKeyFrameRequest(): Boolean = this == Kind.NO_ENCODER_OUTPUT
 
     companion object {
-        /** 与连接 timeline 的 5 s「最近未发出新视频帧」同一量级，便于两条证据对照。 */
-        const val WARN_MILLIS = 5_000L
+        /**
+         * 报警阈值。2026-11-25 真机日志：会话最大发送帧间隔 4880 ms，旧阈值 5000 ms 永远
+         * 不触发，报告里「无停滞」与用户体感（2-4 秒画面冻结）完全相反。降到 1500 ms 后，
+         * 1.5-5 s 的冻结都会进报告；采样周期 100 ms，不会因粒度误报。
+         */
+        const val WARN_MILLIS = 1_500L
 
         /** 与 `TcpLiveness` 的约 19 s 对端死亡判定对齐：先放弃自动补救，再交给 keepalive。 */
         const val GIVE_UP_MILLIS = 20_000L

@@ -213,12 +213,25 @@ class Iap2BluetoothServer(
                     null
                 }
             val match = peerMatch(target, peerAddress)
-            diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
             if (target != null && match == BluetoothDiagnostics.PeerMatch.OTHER) {
+                diagnostics.incoming(diagnosticEpoch, BluetoothDiagnostics.Service.IAP2, peerAddress, match)
                 log(
                     "BT: 忽略非目标设备连入 name=$peerName addr=${peerAddress ?: "?"}" +
                         "（当前目标：「${target.name}」）",
                 )
+                runCatching { socket.close() }
+                continue
+            }
+            val admit = BtSessionGate.admitInbound(peerAddress)
+            diagnostics.incoming(
+                diagnosticEpoch,
+                BluetoothDiagnostics.Service.IAP2,
+                peerAddress,
+                match,
+                outboundDialing = !admit,
+            )
+            if (!admit) {
+                log("BT: 拒绝 $peerName 的 iAP2 回连（同一车机正在出站拨号，继续监听）")
                 runCatching { socket.close() }
                 continue
             }

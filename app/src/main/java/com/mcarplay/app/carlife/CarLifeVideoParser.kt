@@ -46,11 +46,72 @@ class CarLifeVideoParser {
     private var latestSps: ByteArray? = null
     private var latestPps: ByteArray? = null
 
+    /** 包/帧尺寸诊断（取走即清零）。用于判断 CarWith 是否把一帧拆成很多小包——
+     *  这种情况下 [scannedBytes]（每次切分对 annexBBuffer 的全量重扫）会相对帧字节数放大（O(n²)）。 */
+    class Stats internal constructor(
+        val packets: Long,
+        val packetBytes: Long,
+        val packetMinBytes: Int,
+        val packetMaxBytes: Int,
+        val nals: Long,
+        val accessUnits: Long,
+        val accessUnitBytes: Long,
+        val accessUnitMaxBytes: Int,
+        val scannedBytes: Long,
+    ) {
+        fun describe(): String {
+            if (packets == 0L) return "无数据"
+            val packetsPerFrame = if (accessUnits > 0) "%.1f".format(packets.toDouble() / accessUnits) else "?"
+            val amplify = if (accessUnitBytes > 0) "%.1f".format(scannedBytes.toDouble() / accessUnitBytes) else "?"
+            return "包=$packets 包长min=${packetMinBytes}B max=${packetMaxBytes}B 每帧包数=$packetsPerFrame " +
+                "NAL=$nals 帧=$accessUnits 帧均=${if (accessUnits > 0) accessUnitBytes / accessUnits else 0}B " +
+                "帧最大=${accessUnitMaxBytes}B 切分扫描=${scannedBytes}B（放大 ${amplify}x）"
+        }
+    }
+
+    private var statPackets = 0L
+    private var statPacketBytes = 0L
+    private var statPacketMin = Int.MAX_VALUE
+    private var statPacketMax = 0
+    private var statNals = 0L
+    private var statAccessUnits = 0L
+    private var statAccessUnitBytes = 0L
+    private var statAccessUnitMax = 0
+    private var statScannedBytes = 0L
+
+    @Synchronized
+    fun takeStats(): Stats =
+        Stats(
+            statPackets,
+            statPacketBytes,
+            if (statPacketMin == Int.MAX_VALUE) 0 else statPacketMin,
+            statPacketMax,
+            statNals,
+            statAccessUnits,
+            statAccessUnitBytes,
+            statAccessUnitMax,
+            statScannedBytes,
+        ).also {
+            statPackets = 0L
+            statPacketBytes = 0L
+            statPacketMin = Int.MAX_VALUE
+            statPacketMax = 0
+            statNals = 0L
+            statAccessUnits = 0L
+            statAccessUnitBytes = 0L
+            statAccessUnitMax = 0
+            statScannedBytes = 0L
+        }
+
     fun push(
         timestamp: Long,
         payload: ByteArray,
     ): List<CarLifeVideoAccessUnit> {
         if (payload.isEmpty()) return emptyList()
+        statPackets++
+        statPacketBytes += payload.size
+        if (payload.size < statPacketMin) statPacketMin = payload.size
+        if (payload.size > statPacketMax) statPacketMax = payload.size
         val complete = ArrayList<CarLifeVideoAccessUnit>(2)
 
         // Complete the previous trailing NAL only when the timestamp changes.
@@ -78,6 +139,7 @@ class CarLifeVideoParser {
         final: Boolean,
         target: MutableList<CarLifeVideoAccessUnit>,
     ) {
+        if (annexBBuffer.isNotEmpty()) statScannedBytes += annexBBuffer.size
         val starts = annexBStartCodes(annexBBuffer)
         var startsAccessUnitBeforeTrailing = false
         if (starts.isEmpty()) {
@@ -138,6 +200,7 @@ class CarLifeVideoParser {
         if (startsAccessUnit) flushAccessUnit(target)
         if (pendingTimestamp == null) pendingTimestamp = timestamp
         pendingNals += nal
+        statNals++
         pendingHasVcl = pendingHasVcl || isVcl
         when (type) {
             5 -> pendingHasIdr = true
@@ -186,6 +249,9 @@ class CarLifeVideoParser {
                 sps = pendingSps ?: latestSps,
                 pps = pendingPps ?: latestPps,
             )
+        statAccessUnits++
+        statAccessUnitBytes += bytes.size()
+        if (bytes.size() > statAccessUnitMax) statAccessUnitMax = bytes.size()
         resetAccessUnit()
     }
 

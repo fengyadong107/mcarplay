@@ -145,7 +145,10 @@ internal class ScreenOutputGate(
     }
 
     companion object {
-        /** 等待 IDR 时重试关键帧请求的最小间隔。 */
-        const val DEFAULT_KEY_FRAME_RETRY_MS = 1_000L
+        /**
+         * 等待 IDR 时重试关键帧请求的最小间隔。车机归还主屏后 CarWith 出 IDR 偶尔要 1 s 以上
+         * （2026-11-25 21:00 实测恢复另耗 1.232 s）；500 ms 让恢复等待缩短到半秒级。
+         */
+        const val DEFAULT_KEY_FRAME_RETRY_MS = 500L
     }
 }

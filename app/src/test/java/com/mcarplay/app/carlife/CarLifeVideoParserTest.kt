@@ -24,6 +24,22 @@ class CarLifeVideoParserTest {
         )
 
     @Test
+    fun statsCountPacketsFramesAndScanAmplification() {
+        val parser = CarLifeVideoParser()
+        // 一帧 IDR 拆成两个小包：第二个包才补齐 NAL 的 body。
+        parser.push(100, byteArrayOf(0, 0, 0, 1, 0x65, 0x80.toByte()))
+        parser.push(100, byteArrayOf(1, 2, 3, 4))
+        // 同一时间戳的下一帧 P：first_mb_in_slice=0 触发上一帧完成。
+        parser.push(100, byteArrayOf(0, 0, 0, 1, 0x41, 0x80.toByte(), 5, 6))
+        val stats = parser.takeStats()
+        assertEquals(3L, stats.packets)
+        assertEquals(1L, stats.accessUnits)
+        assertTrue(stats.scannedBytes > stats.accessUnitBytes)
+        // 取走后应清零。
+        assertEquals(0L, parser.takeStats().packets)
+    }
+
+    @Test
     fun sliceWithFirstMbZeroStartsNextAccessUnitAtSameTimestamp() {
         val parser = CarLifeVideoParser()
         parser.push(100, byteArrayOf(0, 0, 0, 1, 0x65, 0x80.toByte(), 1, 2))
