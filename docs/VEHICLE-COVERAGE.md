@@ -52,7 +52,7 @@ CarPlay 的座舱项目，但「提供 IVI」不等于 CarPlay 接收端协议�
 | 小米 SU7 Max | 未知 | 小米（待查）/ 待查 / 待查 | 未知 | ✗ | · | · | · | · | · | · | · | [2026-10-28](CARWITH-ENTRY-FINDINGS.md)：iAP2 RFCOMM 未被接受，车机未回连，未拿到协议指纹；尚不能判定是否支持无线 CarPlay |
 | 奇瑞 艾瑞泽 8（2022 款） | `DESAY_SV` | 德赛西威 / Renesas R-Car H3（`r8a7795`）/ Android 9，固件 `M1E_IC2172/82_03_21.387_250619_R` | Apple CarPlay 接收端 R14 库（`libAirPlay_R14_vehicle.so`、`libcarplayserver_R14_vehicle.so`），德赛西威集成 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | [2026-10-31](CARWITH-ENTRY-FINDINGS.md)：首次音画触控、两轮媒体约 107 分钟、直接重连验收；[2026-11-02](CARWITH-ENTRY-FINDINGS.md)：MFi 固定 32B 后点选到出画约 12 s。蓝牙须由车机回连（手机主动连入不被接受），中控重启或车机 CarPlay 崩溃后需在车机蓝牙设置点选手机。**已知问题：** 每次断开约 20 s 后车机 CarPlay 进程崩溃（`_PerformPeriodTasks+640`），约 5 s 后自动重启并可回连 |
 | 奇瑞 艾瑞泽 8 雅（2022 款，用户报车机版本「2.0.4」） | `DESAY_SV` | 德赛西威（推断）/ 待查 / 待查 | 未知；SDP 与上一行同为无 `…caff`、带 `ec884348…` 厂商服务 | ✗ | · | · | · | · | · | · | · | [2026-11-02](CARWITH-ENTRY-FINDINGS.md)：手机主动连入 34 次均在 43–127 ms 内 `READ_FAILED`，车机未回连；「等车机回连」修改待该车复测 |
-| 奇瑞 瑞虎（车型待定） | `DESAY_SV` | 德赛西威 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
+| 奇瑞 瑞虎 8Plus（2025 款） | `DESAY_SV` | 德赛西威（推断）/ 高通 8155（用户提供）/ 待查 | 未知；iAP2 自报画像与艾瑞泽 8 行相同（`Cloudrive / Tiggo / CHERY`、`sourceVersion=320.17.7`） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | [2026-11-27](#desay_sv-协议指纹与车型更正2026-11-27)：协议画像与艾瑞泽 8 行一致，实证记录同该行；用户确认为当前主用车 |
 | 大众 帕萨特 2025 款 | 未知 | 待查（iAP2 自报厂商大众，型号字段为空）/ 待查 / 待查 | 未知 | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | [2026-10-31 至 11-01](CARWITH-ENTRY-FINDINGS.md)：SDP 无 `…caff` 但 RFCOMM 可连入；收到 ctrl 邀请后入网、配对、推流；11-01 22:46 首次出画并可触控。手机端「开启声音」曾使会话被车机重置，重连后点 CarPlay 图标无效，对应修复待同车复测 |
 | 吉利 / 领克（车型待定） | `ECARX_CLOUDPEAK` 或 `NEUSOFT_NAGIVI` | 待查 | 未知 | · | · | · | · | · | · | · | · | — |
 | Volvo EX30 | `ECARX_CLOUDPEAK` | 亿咖通 / 待查 / 待查 | 未知 | · | · | · | · | · | · | · | · | — |
@@ -63,7 +63,9 @@ CarPlay 的座舱项目，但「提供 IVI」不等于 CarPlay 接收端协议�
 
 DiPlay 的重连尚未在当前版本上验证；WinPlay 与 DiPlay 都是桌面接收端，不能代表任何车机。
 
-**`DESAY_SV` 协议指纹（艾瑞泽 8，2026-10-31 / 11-02）：** iAP2 `0x1d01` 自报 `Cloudrive / Tiggo / CHERY`、硬件 `HWS002`；SDP 不提供 `…caff`，
+**`DESAY_SV` 协议指纹与车型更正（2026-11-27）：** 用户确认当前主用车为 **2025 款奇瑞瑞虎 8Plus（高通 8155）**。2026-11-25 起的诊断报告显示其 iAP2 自报画像与本族既有记录完全相同（`Cloudrive / Tiggo / CHERY`、`sourceVersion=320.17.7`、MFi 固定 32B）。此前 2026-10-31/11-02 的记录按用户当时口述记为「艾瑞泽 8（2022 款）」并附 Renesas R-Car H3/Android 9 硬件信息——该硬件信息与 8155 不符，两种可能：_当时记录的硬件信息来自另一台车或为误记，待下次到车复核 `ADB getprop` 后定谳_。「艾瑞泽 8」命名保留为历史记录，协议策略（`CHERY + Tiggo + 320.17.7`）对两行同样生效。
+
+**`DESAY_SV` 协议指纹（历史记录，2026-10-31 / 11-02）：** iAP2 `0x1d01` 自报 `Cloudrive / Tiggo / CHERY`、硬件 `HWS002`；SDP 不提供 `…caff`，
 带厂商 UUID `ec884348-cd41-40a2-9727-575d50bf1fd3`；MFi 为 Auth 3.0 芯片，只接受 32 字节挑战（20/16 字节会让芯片挂起约 35 s）；
 AirPlay 端口 7000，车机不支持 type-130 流。兼容策略按 iAP2 厂商 `CHERY` 登记 `chery.*` 规则（见 [接收端兼容设计](RECEIVER-COMPATIBILITY.md)）；
 同族其他车机的指纹核对后再决定是否扩展到 `DESAY_SV` 全族。
