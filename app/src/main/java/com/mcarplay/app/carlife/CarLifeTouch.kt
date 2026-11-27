@@ -117,9 +117,15 @@ class CarLifeMultiTouchState {
                     last0Y = c0.y
                     last1X = c1.x
                     last1Y = c1.y
-                    out += CarLifeWireTouch(
-                        CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y, act.MOVE, c1.x, c1.y,
-                    )
+                    out +=
+                        CarLifeWireTouch(
+                            CarLifeProtocol.TOUCH_ACTION,
+                            c0.x,
+                            c0.y,
+                            act.MOVE,
+                            c1.x,
+                            c1.y,
+                        )
                 }
                 return out
             }
@@ -127,24 +133,40 @@ class CarLifeMultiTouchState {
                 // 第一指（或两指同时）抬起：先用上一帧坐标补 POINTER_UP(1)，
                 // 否则引擎留一个永不放开的幽灵触点。
                 if (slot1Down) {
-                    out += CarLifeWireTouch(
-                        CarLifeProtocol.TOUCH_ACTION, last0X, last0Y,
-                        act.withPointer(act.POINTER_UP, 1), last1X, last1Y,
-                    )
+                    out +=
+                        CarLifeWireTouch(
+                            CarLifeProtocol.TOUCH_ACTION,
+                            last0X,
+                            last0Y,
+                            act.withPointer(act.POINTER_UP, 1),
+                            last1X,
+                            last1Y,
+                        )
                 }
-                out += CarLifeWireTouch(
-                    CarLifeProtocol.TOUCH_ACTION, last0X, last0Y, act.UP, last1X, last1Y,
-                )
+                out +=
+                    CarLifeWireTouch(
+                        CarLifeProtocol.TOUCH_ACTION,
+                        last0X,
+                        last0Y,
+                        act.UP,
+                        last1X,
+                        last1Y,
+                    )
                 slot0Down = false
                 slot1Down = false
                 multiActive = false
                 return out
             }
             // 第二指抬起：POINTER_UP(1)，随后第一指回到单点通道
-            out += CarLifeWireTouch(
-                CarLifeProtocol.TOUCH_ACTION, c0!!.x, c0.y,
-                act.withPointer(act.POINTER_UP, 1), last1X, last1Y,
-            )
+            out +=
+                CarLifeWireTouch(
+                    CarLifeProtocol.TOUCH_ACTION,
+                    c0!!.x,
+                    c0.y,
+                    act.withPointer(act.POINTER_UP, 1),
+                    last1X,
+                    last1Y,
+                )
             last0X = c0.x
             last0Y = c0.y
             slot1Down = false
@@ -161,9 +183,15 @@ class CarLifeMultiTouchState {
                     // CarWith 只在 case 5（POINTER_DOWN）里登记第二根手指（反编译
                     // CarlifeTouchManager.onActionEvent）；只发一条带两个点的 ACTION_DOWN
                     // 时它只认第 0 指，后续 MOVE 退化成单指拖——真机现象：地图朝左平移。
-                    out += CarLifeWireTouch(
-                        CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y, act.DOWN, c1!!.x, c1.y,
-                    )
+                    out +=
+                        CarLifeWireTouch(
+                            CarLifeProtocol.TOUCH_ACTION,
+                            c0.x,
+                            c0.y,
+                            act.DOWN,
+                            c1!!.x,
+                            c1.y,
+                        )
                 } else {
                     out += CarLifeWireTouch(CarLifeProtocol.TOUCH_DOWN, c0.x, c0.y)
                 }
@@ -176,10 +204,15 @@ class CarLifeMultiTouchState {
                 last0Y = c0.y
                 last1X = c1!!.x
                 last1Y = c1.y
-                out += CarLifeWireTouch(
-                    CarLifeProtocol.TOUCH_ACTION, c0.x, c0.y,
-                    act.withPointer(act.POINTER_DOWN, 1), c1.x, c1.y,
-                )
+                out +=
+                    CarLifeWireTouch(
+                        CarLifeProtocol.TOUCH_ACTION,
+                        c0.x,
+                        c0.y,
+                        act.withPointer(act.POINTER_DOWN, 1),
+                        c1.x,
+                        c1.y,
+                    )
             } else if (!multiActive && (c0!!.x != last0X || c0.y != last0Y)) {
                 last0X = c0.x
                 last0Y = c0.y
@@ -202,16 +235,27 @@ class CarLifeMultiTouchState {
         val act = CarLifeProtocol.TouchAction
         if (multiActive) {
             if (slot1Down) {
-                out += CarLifeWireTouch(
-                    CarLifeProtocol.TOUCH_ACTION, last0X, last0Y,
-                    act.withPointer(act.POINTER_UP, 1), last1X, last1Y,
-                )
+                out +=
+                    CarLifeWireTouch(
+                        CarLifeProtocol.TOUCH_ACTION,
+                        last0X,
+                        last0Y,
+                        act.withPointer(act.POINTER_UP, 1),
+                        last1X,
+                        last1Y,
+                    )
                 slot1Down = false
             }
             if (slot0Down) {
-                out += CarLifeWireTouch(
-                    CarLifeProtocol.TOUCH_ACTION, last0X, last0Y, act.UP, last1X, last1Y,
-                )
+                out +=
+                    CarLifeWireTouch(
+                        CarLifeProtocol.TOUCH_ACTION,
+                        last0X,
+                        last0Y,
+                        act.UP,
+                        last1X,
+                        last1Y,
+                    )
                 slot0Down = false
             }
             multiActive = false

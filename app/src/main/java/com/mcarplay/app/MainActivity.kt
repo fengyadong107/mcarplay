@@ -70,9 +70,9 @@ import com.mcarplay.app.ui.WhatsNewDialog
 import com.mcarplay.app.ui.kit.StepperView
 import com.mcarplay.app.update.WhatsNew
 import com.mcarplay.app.util.Bg
-import com.mcarplay.app.util.copySensitiveText
 import com.mcarplay.app.util.DeviceIdentity
 import com.mcarplay.app.util.LogExporter
+import com.mcarplay.app.util.copySensitiveText
 
 /**
  * 手机侧界面（Material 3 暗色重构，设计稿 design/phone-ui-proto.html）：

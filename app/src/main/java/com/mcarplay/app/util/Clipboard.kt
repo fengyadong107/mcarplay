@@ -17,9 +17,10 @@ fun copySensitiveText(
     val clip = ClipData.newPlainText(label, text)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         // Android 13+ 的剪贴板浮层会直接显示内容；标记敏感后系统改为隐藏预览。
-        clip.description.extras = PersistableBundle().apply {
-            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-        }
+        clip.description.extras =
+            PersistableBundle().apply {
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
     }
     cm.setPrimaryClip(clip)
 }

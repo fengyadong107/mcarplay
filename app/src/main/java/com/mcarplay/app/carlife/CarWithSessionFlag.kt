@@ -19,15 +19,21 @@ internal object CarWithSessionFlag {
 
     fun markOpen(context: Context) {
         runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putBoolean(KEY_OPEN, true).apply()
+            context
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_OPEN, true)
+                .apply()
         }
     }
 
     fun clear(context: Context) {
         runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().remove(KEY_OPEN).apply()
+            context
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_OPEN)
+                .apply()
         }
     }
 

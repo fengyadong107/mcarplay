@@ -232,7 +232,10 @@ class MediaListenerService : NotificationListenerService() {
                         contentResolver.openInputStream(android.net.Uri.parse(uri))
                     }
                 )?.use { it.readBytes() } ?: return@runCatching null
-            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            val bounds =
+                android.graphics.BitmapFactory
+                    .Options()
+                    .apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             val opts =
                 android.graphics.BitmapFactory.Options().apply {

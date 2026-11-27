@@ -1832,7 +1832,6 @@ class AirPlayClient(
      */
     private var controlIapCount = 0
 
-
     /** 仅允许有序断开的 iAP 帧穿过 STOPPING，普通迟到帧仍被拒绝。 */
     private val stopIapTransmissions = ThreadLocal<MutableList<java.util.concurrent.Future<Boolean>>>()
 

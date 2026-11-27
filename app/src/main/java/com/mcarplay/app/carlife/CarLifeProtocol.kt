@@ -51,6 +51,7 @@ object CarLifeProtocol {
     const val MD_AES_SEED = 0x1006C
     const val MD_ENCRYPT_READY = 0x1006E
     const val VIDEO_ENCODER_INIT_DONE = 0x10008
+
     /** 复合动作：负载带 MotionEvent action（指针索引在高字节），双指走这里。 */
     const val TOUCH_ACTION = 425985 // 0x68001
     const val TOUCH_DOWN = 425986
@@ -326,8 +327,9 @@ object CarLifeProtocol {
         y: Int,
         pointerX: Int = 0,
         pointerY: Int = 0,
-    ): ByteArray = pbInt(1, action) + pbInt(2, x) + pbInt(3, y) +
-        if (pointerX != 0 || pointerY != 0) pbInt(4, pointerX) + pbInt(5, pointerY) else ByteArray(0)
+    ): ByteArray =
+        pbInt(1, action) + pbInt(2, x) + pbInt(3, y) +
+            if (pointerX != 0 || pointerY != 0) pbInt(4, pointerX) + pbInt(5, pointerY) else ByteArray(0)
 
     fun huInfoPayload(): ByteArray =
         pbString(1, "Android") +
